@@ -1,6 +1,6 @@
 import { getLocalRunnerService } from "./integrations/integration-runtime.js";
 import type { AiEngineAdapter, TeamAiEngineSettings } from "./ai-engine-settings.js";
-import { aiEngineAdapterLabel, otherAiEngineAdapter } from "./ai-engine-settings.js";
+import { aiEngineAdapterFallbacks, aiEngineAdapterLabel } from "./ai-engine-settings.js";
 import { adaptEngineCliPromptForAdapter } from "./ai-engine-prompts.js";
 import type { SessionUser } from "./types.js";
 
@@ -45,8 +45,10 @@ export class EngineUnavailableError extends Error {
   }
 }
 
-function cliVersionOf(runner: { workbuddyVersion: string; codexVersion: string }, adapter: AiEngineAdapter) {
-  return adapter === "workbuddy" ? runner.workbuddyVersion : runner.codexVersion;
+function cliVersionOf(runner: { workbuddyVersion: string; codexVersion: string; claudeVersion?: string }, adapter: AiEngineAdapter) {
+  if (adapter === "workbuddy") return runner.workbuddyVersion;
+  if (adapter === "claude") return runner.claudeVersion || "";
+  return runner.codexVersion;
 }
 
 /**
@@ -80,12 +82,12 @@ export async function pickEngineRunner(
  * 指定了 runnerId 时仍然只在那台机器上找，不静默换机器。
  */
 export function chooseEngineRunner(
-  runners: Array<{ id: string; ownerId: string; displayName: string; online: boolean; capabilities: string[]; workspaces: string[]; workbuddyVersion: string; codexVersion: string; lastError: string }>,
+  runners: Array<{ id: string; ownerId: string; displayName: string; online: boolean; capabilities: string[]; workspaces: string[]; workbuddyVersion: string; codexVersion: string; claudeVersion?: string; lastError: string }>,
   actor: SessionUser,
   settings: TeamAiEngineSettings
 ): EngineRunnerChoice {
   const preferredAdapter = settings.cliAdapter;
-  const adapters: AiEngineAdapter[] = [preferredAdapter, otherAiEngineAdapter(preferredAdapter)];
+  const adapters: AiEngineAdapter[] = [preferredAdapter, ...aiEngineAdapterFallbacks(preferredAdapter)];
   const label = aiEngineAdapterLabel(preferredAdapter);
   const online = runners.filter((runner) => runner.online);
   const usableFor = (adapter: AiEngineAdapter) => online.filter((runner) => runner.capabilities.includes(adapter));
@@ -103,7 +105,7 @@ export function chooseEngineRunner(
       "AI_ENGINE_RUNNER_OFFLINE",
       `设置里指定的 Runner 当前不可用，${alternative
         ? `另有在线可用的 Runner：${alternative.displayName || alternative.id}（可在「AI 引擎设置」里改用它）`
-        : "且没有其它在线的 Runner 提供 WorkBuddy CLI 或 Codex CLI"}`
+        : "且没有其它在线的 Runner 提供 WorkBuddy CLI、Codex CLI 或 Claude Code CLI"}`
     );
   }
   for (const adapter of adapters) {
@@ -115,7 +117,7 @@ export function chooseEngineRunner(
   if (broken) throw engineCliMissingError(broken, preferredAdapter);
   throw new EngineUnavailableError(
     "AI_ENGINE_RUNNER_MISSING",
-    `没有在线的本地 Runner 提供 ${label}（也没有可替代的 ${aiEngineAdapterLabel(otherAiEngineAdapter(preferredAdapter))}）；请先在「集成中心 · 本地 Runner」完成配对`
+    `没有在线的本地 Runner 提供 ${label}（也没有可替代的 ${aiEngineAdapterFallbacks(preferredAdapter).map(aiEngineAdapterLabel).join(" / ")}）；请先在「集成中心 · 本地 Runner」完成配对`
   );
 }
 
@@ -137,7 +139,7 @@ function engineCliMissingError(
 }
 
 function runnerChoice(
-  runner: { id: string; ownerId: string; displayName: string; workspaces: string[]; workbuddyVersion: string; codexVersion: string; lastError?: string },
+  runner: { id: string; ownerId: string; displayName: string; workspaces: string[]; workbuddyVersion: string; codexVersion: string; claudeVersion?: string; lastError?: string },
   actor: SessionUser,
   adapter: AiEngineAdapter,
   settings: TeamAiEngineSettings
@@ -169,6 +171,7 @@ export interface EngineRunnerSummary {
   workspaces: string[];
   workbuddyVersion: string;
   codexVersion: string;
+  claudeVersion: string;
 }
 
 /** 供设置页展示：当前可用（已配对）的本机 Runner 清单 */
@@ -184,7 +187,8 @@ export async function listEngineRunners(actor: SessionUser): Promise<EngineRunne
     capabilities: runner.capabilities,
     workspaces: runner.workspaces,
     workbuddyVersion: runner.workbuddyVersion,
-    codexVersion: runner.codexVersion
+    codexVersion: runner.codexVersion,
+    claudeVersion: runner.claudeVersion || ""
   }));
 }
 
@@ -232,6 +236,7 @@ const CLI_TIMEOUT_SIGNATURE = /执行超过|已停止|超时|timed out|timeout/i
 export function classifyEngineCliIssue(message: string, adapter: AiEngineAdapter = "workbuddy"): EngineCliIssue {
   const text = String(message || "").trim();
   if (adapter === "codex") return classifyCodexCliIssue(text);
+  if (adapter === "claude") return classifyClaudeCliIssue(text);
   if (CLI_AUTH_SIGNATURE.test(text)) {
     return {
       code: "cli_auth_required",
@@ -306,6 +311,59 @@ function classifyCodexCliIssue(text: string): EngineCliIssue {
   };
 }
 
+/**
+ * Claude Code CLI 版的故障话术：凭据由 `claude login` 写入用户目录（订阅登录，不需要 API Key）。
+ * 联网这条与 WorkBuddy 相反——Claude 出网往往**需要**代理，所以提示是"确认代理可用"，而不是"关掉代理"。
+ */
+function classifyClaudeCliIssue(text: string): EngineCliIssue {
+  if (CLI_AUTH_SIGNATURE.test(text) || /invalid api key|please run \/?login|oauth|token (has )?expired/iu.test(text)) {
+    return {
+      code: "cli_auth_required",
+      title: "本机 Claude Code CLI 当前登录态不可用",
+      detail: `Claude Code CLI 报「${text.slice(0, 160)}」。它走你自己的 Claude 订阅登录，不需要 API Key；CRM 只要求这台机器的 claude 能用，不绑定具体账号。`,
+      command: "① 终端执行 claude --version 确认 CLI 本身可用　② 需要登录时执行 claude，进入后输入 /login　③ 登录后稍等十几秒再重试（Runner 会自动重新探测）"
+    };
+  }
+  if (/rate.?limit|usage limit|quota|overloaded|429|额度/iu.test(text)) {
+    return {
+      code: "cli_failed",
+      title: "Claude 订阅额度暂时用完",
+      detail: `Claude Code CLI 报「${text.slice(0, 160)}」。订阅有 5 小时 / 每周的用量窗口，超过后要等窗口重置。`,
+      command: "等额度窗口重置后重试；或在「AI 引擎设置」里把 Claude 模型换成 haiku / sonnet 这类更省额度的档位"
+    };
+  }
+  if (CLI_NETWORK_SIGNATURE.test(text)) {
+    return {
+      code: "cli_network",
+      title: "本机 Claude Code CLI 联网失败",
+      detail: `Claude Code CLI 连不上 Anthropic（${text.slice(0, 160)}）。Claude 出网通常需要可用的代理，最常见原因是代理工具没运行或端口变了。`,
+      command: "确认代理工具正在运行，并在启动 Runner 的终端里设置好 HTTPS_PROXY；可先单独运行 claude -p \"hello\" 验证联网"
+    };
+  }
+  if (CLI_TIMEOUT_SIGNATURE.test(text)) {
+    return {
+      code: "cli_timeout",
+      title: "Claude Code CLI 执行超时",
+      detail: `${text.slice(0, 160)}。文件过大或模型排队时会出现。`,
+      command: "在「AI 引擎设置」里调大 CLI 超时秒数，或换更小的文件重试"
+    };
+  }
+  if (/model/iu.test(text) && /not (found|supported|available)|unknown|invalid|does not exist|不存在|不支持/iu.test(text)) {
+    return {
+      code: "cli_failed",
+      title: "Claude Code CLI 不认识所选模型",
+      detail: `Claude 报「${text.slice(0, 160)}」。当前订阅可能没有这个模型的权限，或模型名写错了。`,
+      command: "在「AI 引擎设置」里把 Claude 模型改成 sonnet / opus / haiku，或清空以跟随当前账号的默认模型"
+    };
+  }
+  return {
+    code: "cli_failed",
+    title: "本机 Claude Code CLI 执行失败",
+    detail: text ? text.slice(0, 200) : "Claude Code CLI 没有返回可用的错误信息。",
+    command: "可先在终端单独运行 claude --version 和 claude -p \"hello\" 确认 CLI 本身可用，再重试"
+  };
+}
+
 /** Runner 不在线 / 未配对时给用户的动作（比「没有在线的本地 Runner」有用得多） */
 export function engineRunnerOfflineIssue(hint: string, code = ""): EngineCliIssue {
   if (code === "AI_ENGINE_CLI_MISSING") {
@@ -313,7 +371,7 @@ export function engineRunnerOfflineIssue(hint: string, code = ""): EngineCliIssu
       code: "cli_failed",
       title: "这台 Runner 上暂时用不了本机 CLI",
       detail: hint || "Runner 在线，但当前探测不到可用的本机 CLI。",
-      command: "① 终端执行 /opt/homebrew/bin/codebuddy --version（WorkBuddy CLI）或 codex --version（Codex CLI）确认 CLI 可用，用哪个账号都行　② 刚切换过 CLI 账号就等十几秒，Runner 会自动重新探测并恢复　③ 仍不行则重启 Runner：launchctl kickstart -k gui/$(id -u)/com.goodjob.local-runner"
+      command: "① 终端执行 /opt/homebrew/bin/codebuddy --version（WorkBuddy CLI）或 codex --version（Codex CLI）或 claude --version（Claude Code CLI）确认 CLI 可用，用哪个账号都行　② 刚切换过 CLI 账号就等十几秒，Runner 会自动重新探测并恢复　③ 仍不行则重启 Runner：launchctl kickstart -k gui/$(id -u)/com.goodjob.local-runner"
     };
   }
   const title = code === "AI_ENGINE_RUNNER_OFFLINE" ? "设置里指定的 Runner 当前不可用"

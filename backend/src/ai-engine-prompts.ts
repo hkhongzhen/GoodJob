@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // AI 执行引擎 · 提示词与结果解析
 //
-// 走 CLI（WorkBuddy CLI / Codex CLI）时，CRM 不再直接调模型 API，而是把
+// 走 CLI（WorkBuddy CLI / Codex CLI / Claude Code CLI）时，CRM 不再直接调模型 API，而是把
 // 「事实 + 硬约束 + 输出格式」写成一个自包含的提示词，交给本机 Runner 上的 CLI 执行，
 // 再把 CLI 的文本结果解析回 CRM 自己的数据结构。
 //
@@ -117,13 +117,40 @@ export function engineSkillDirectiveForCodex(skillName: string) {
  *     换成 Codex 只读沙箱的等价说明（命令不能联网，用联网搜索 / goodjob_browser）。
  * WorkBuddy 原样返回，行为不变。
  */
-export function adaptEngineCliPromptForAdapter(prompt: string, adapter: "workbuddy" | "codex") {
-  if (adapter !== "codex") return prompt;
-  return prompt
-    .replace(
-      /FIRST STEP: load the Skill named `([^`]+)` using the Skill tool, then follow that Skill's methodology for the whole task\. If that Skill is unavailable in this session, continue with the instructions below anyway — never stop, fail or ask because a Skill is missing\./gu,
-      (_match, skillName: string) => engineSkillDirectiveForCodex(skillName)
-    )
+/**
+ * 获客提示词对 Claude 的「别早放弃」补充。
+ *
+ * 2026-11-13 实测：同一条硬门槛提示词（必须有姓名的决策人/采购人 + 公开商务邮箱，泛邮箱不算，
+ * 「零结果是可接受答案」），Claude 只搜 2 次、20 秒就交了 {"companies": []}。提示词里那句
+ * 「零结果可接受」对它是出口：它会很快走向出口。这里对 Claude 明确提高尽力标准——
+ * 只有真的做了足够多的检索与核实仍没有合格对象，才允许返回空列表。其它 CLI 的提示词不变。
+ */
+function claudeAcquisitionPersistence(prompt: string) {
+  if (!prompt.includes("B2B export-sales prospecting researcher")) return prompt;
+  return [
+    prompt,
+    "",
+    "## Effort requirement (read carefully)",
+    "- Zero results is acceptable ONLY after real effort: run at least 10 different web searches and open at least 15 pages (official sites, team / leadership / about / contact / imprint pages, trade-association member lists, trade directories, press releases) before you may return an empty list.",
+    "- Work company by company. Discover MANY named companies first (vary queries by company type, product/process words, region, language of the target country), then verify each one.",
+    "- To find a decision maker or purchasing contact: check the company's Team / Leadership / About / Management / Imprint (Impressum) pages, press releases, trade-fair exhibitor pages and tender documents; search \"<company> purchasing manager\", \"<company> owner email\". To read pages, use WebFetch if it is in your tool list; in many Claude Code installs it is NOT a direct tool, and then you must use the Agent tool with subagent_type \"web-fetch\" as your page reader: give it the full URL(s) and exactly what to extract (names, job titles, every public email and phone number shown on the page), and launch several in parallel when you have several pages to read.",
+    "- If one source has no usable contact, try the next source for that same company before dropping it. Only drop a company when you have tried several sources.",
+    "- Sub-agents are ONLY for reading pages (the web-fetch agent); do the searching, judging and the final JSON yourself, and accept a contact only if its text was returned to you from a page. Never guess an email address."
+  ].join("\n");
+}
+
+export function adaptEngineCliPromptForAdapter(prompt: string, adapter: "workbuddy" | "codex" | "claude") {
+  if (adapter === "workbuddy") return prompt;
+  // Codex 与 Claude Code 都没有 WorkBuddy 的技能注册：Claude 的 Runner 用 --safe-mode 关掉了
+  // 一切本机自定义（含用户技能与 Skill 工具），所以同样改成「读工作目录里的 SKILL.md」。
+  const withSkillFile = prompt.replace(
+    /FIRST STEP: load the Skill named `([^`]+)` using the Skill tool, then follow that Skill's methodology for the whole task\. If that Skill is unavailable in this session, continue with the instructions below anyway — never stop, fail or ask because a Skill is missing\./gu,
+    (_match, skillName: string) => engineSkillDirectiveForCodex(skillName)
+  );
+  // Claude Code 自带 WebSearch / WebFetch，联网语境与 WorkBuddy 一致（实测无头 plan 模式下 WebSearch 可直接用），
+  // 其余提示词原样保留；只有 Codex 的只读沙箱需要下面这几处改写。
+  if (adapter === "claude") return claudeAcquisitionPersistence(withSkillFile);
+  return withSkillFile
     .replace(
       "In this non-interactive session the DIRECT page-fetch tools (WebFetch, Bash/curl) are DENIED by the permission policy. Do NOT waste turns trying them.",
       "This session runs in a read-only sandbox: shell commands cannot reach the network, so do NOT try curl, wget or other commands to fetch pages."

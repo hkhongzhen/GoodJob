@@ -4,7 +4,7 @@
  * 由 server.ts 拆分而来：代码逐字迁移，注册顺序与拆分前一致。
  * 共享逻辑与全局中间件在 ../server-core.ts。
  */
-import { engineCliProfile, otherAiEngineAdapter, readTeamAiEngineSettings } from "../ai-engine-settings.js";
+import { AI_ENGINE_ADAPTERS, aiEngineAdapterFallbacks, engineCliProfile, readTeamAiEngineSettings, type AiEngineAdapter } from "../ai-engine-settings.js";
 import { applyCliProfileToPrompt } from "../ai-engine-service.js";
 import type { Express } from "express";
 import { createHash, randomUUID } from "node:crypto";
@@ -375,7 +375,34 @@ function lfindHash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }
 
-function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser) {
+/**
+ * 给 Claude Code CLI 的 Lfind 执行纪律 + 结果契约。
+ *
+ * 原提示词是按 Codex 写的：「用 $lfind 技能」「本环境没有联网搜索，只能用 goodjob_browser」。
+ * Claude Code 两样都没有——$lfind 技能里才写着 goodjob-lfind-v1 的字段细节，Claude 看不到它就只能猜
+ * （实测 summary 写成了字符串，校验直接失败）；它自带 WebSearch / WebFetch，也没有 goodjob_browser。
+ * 所以 Claude 版必须：①改用自带联网工具；②把结果契约在提示词里写明白（与 lfindResultSchema 一一对应）。
+ */
+const LFIND_CLAUDE_CONTRACT = [
+  "Result contract goodjob-lfind-v1 (the ONLY accepted output). Return exactly one JSON object with these fields:",
+  "{",
+  '  "version": "goodjob-lfind-v1",',
+  '  "summary": { "target": string, "markets": string[], "products": string[], "customerType": string, "rawFound": integer, "accepted": integer, "skipped": integer, "noResultReason": string },',
+  '  "opportunities": [ {',
+  '    "company": string (required), "business": string, "country": string, "website": string (official site URL), "contact": string (person name, if public), "contactInfo": string (a public email / phone / WhatsApp that appears in a cited source),',
+  '    "description": string, "confidence": number 0-100, "qualification": "worth_following" | "review_needed" | "low_fit", "uncertainPoints": string[],',
+  '    "searchReport": { "summary": string, "sourceAuthenticity": "official_confirmed" | "multi_source_supported" | "single_source_supported" | "weak" | "unknown", "verifiedFields": string[],',
+  '      "checkedSources": [ { "url": string, "title": string, "authenticity": "official" | "registry" | "reputable_directory" | "search_result" | "weak", "verifiedFields": string[], "finding": string } ],',
+  '      "contactFinding": { "status": "source_confirmed" | "missing" | "conflicting" | "unverified", "value": string, "sourceUrl": string }, "nextAction": string },',
+  '    "sources": [ { "url": string, "title": string, "evidence": string, "fields": string[] } ]',
+  "  } ],",
+  '  "skipped": [ { "company": string, "reason": string (e.g. "no_contact", "duplicate", "not_overseas"), "detail": string, "sourceUrl": string } ],',
+  '  "failures": [ { "stage": string, "reason": string, "suggestion": string } ]',
+  "}",
+  'IMPORTANT: "summary" MUST be an object (never a string); "skipped" MUST be an array of objects (never a number); put any explanation in summary.noResultReason or in failures[].reason.'
+];
+
+function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser, adapter: AiEngineAdapter = "workbuddy") {
   const store = getStore();
   const customers = store.customers
     .filter((item) => item.teamId === user.teamId)
@@ -395,16 +422,30 @@ function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser)
       sourceUrl: item.sourceUrl || "",
       email: item.email || ""
     }));
+  const claude = adapter === "claude";
   return [
-    "Use $lfind.",
+    ...(claude ? [] : ["Use $lfind."]),
     "Run a GoodJob Lfind public-source overseas B2B prospect discovery task.",
     "Return only the final JSON object following goodjob-lfind-v1. No markdown fences, no explanations after JSON.",
+    ...(claude ? ["", ...LFIND_CLAUDE_CONTRACT] : []),
     "",
     "Execution discipline (important):",
+    ...(claude ? [
+      "- Use WebSearch to find candidates. To open and read a page, use WebFetch if it is in your tool list; in many Claude Code installs it is NOT a direct tool, and then you must use the Agent tool with subagent_type \"web-fetch\" as your page reader: give it the full URL(s) and exactly what to extract (names, job titles, every public email and phone number shown on the page), and launch several in parallel when you have several pages to read. Verify each candidate's official site / contact page this way. Do NOT ask for or wait for any other browser tool, and do NOT stop to ask for permission: actually run the searches now.",
+      "- This is a read-only task: do not write files and do not run shell commands. Your only output is the final JSON object.",
+      "- Sub-agents are ONLY for reading pages (the web-fetch agent). Do the searching, the judging and the final JSON yourself. Every contact value you accept must come from page text that a web-fetch agent returned to you, and you must quote it in sources[].evidence.",
+      "- Be persistent. Do NOT stop after a few searches or after the first pages come back empty. Keep working through candidates until you have the requested number of accepted candidates, or you have run at least 10 different searches and opened at least 15 pages, or the time budget runs out. Finishing early with zero candidates after only a couple of searches is a failure of effort, not a valid result.",
+      "- Candidate discovery: vary your queries (company-type words, product/process words, state or city names, trade-directory sites such as industry association member lists, Thomasnet, Manta, LinkedIn company pages, trade-magazine articles) to surface many different named companies, then check them one by one.",
+      "- Contact verification: when a company's contact page has no email or phone as readable text (image-only page, form-only page, parked/for-sale domain, wrong domain), do NOT give up on that company at once. Also try its About / Contact Us / Procurement / Suppliers / Sales / Press / footer pages, a search such as \"<company> contact email\" or \"<company> purchasing phone\", and verify the domain really belongs to that company. Only after those attempts fail, move it to skipped with reason no_contact and list what you checked.",
+      "- A phone number or email counts only if it appears as text on a page you opened (or in a search result excerpt you quote in sources[].evidence). Never guess a domain or an email pattern.",
+      "- If a source blocks you or returns nothing useful, switch to a different query or site immediately instead of retrying. Guard the total budget: finish within 25 minutes and start writing the final JSON by minute 22 at the latest.",
+      "- If time runs short, return fewer candidates (even zero) with a valid JSON object and explain in summary.noResultReason / failures. An empty opportunities array with valid schema is a successful outcome; a timeout without JSON is a failure."
+    ] : [
     "- This environment has no built-in web search. Use the goodjob_browser controlled browser (Playwright tools) for ALL public web lookups; it is the only search channel.",
     "- If a search engine blocks you (reCAPTCHA, consent wall, 429), do NOT investigate or repair the browser. Immediately switch to a different engine or query (e.g. Bing, DuckDuckGo, Google with different wording) and continue.",
     "- Spend at most 2 minutes total on browser troubleshooting of any kind. Guard the total budget: finish within 25 minutes and start writing the final JSON by minute 22 at the latest.",
     "- If time runs short, return fewer candidates (even zero) with a valid JSON object and explain in summary/failures. An empty opportunities array with valid schema is a successful outcome; a timeout with no output is not.",
+    ]),
     "",
     "GoodJob search request:",
     JSON.stringify({
@@ -431,7 +472,7 @@ function lfindPrompt(input: z.infer<typeof leadSearchSchema>, user: SessionUser)
   ].join("\n");
 }
 
-async function lfindRunnerPlan(user: SessionUser, preferredAdapter: "workbuddy" | "codex" = "workbuddy") {
+async function lfindRunnerPlan(user: SessionUser, preferredAdapter: AiEngineAdapter = "workbuddy") {
   const service = getLocalRunnerService();
   if (!service) return {
     configured: false,
@@ -442,12 +483,12 @@ async function lfindRunnerPlan(user: SessionUser, preferredAdapter: "workbuddy" 
   };
   try {
     const runners = await service.runners(user);
-    // 引擎无关：codex（旧 Codex CLI）与 workbuddy（WorkBuddy CLI）都按同一份
+    // 引擎无关：codex（Codex CLI）、workbuddy（WorkBuddy CLI）与 claude（Claude Code CLI）都按同一份
     // goodjob-lfind-v1 JSON 契约执行，任务派发只看 prompt + workspace。
-    // 优先挑具备团队首选 CLI 的 Runner；没有再退到具备另一个 CLI 的 Runner
+    // 优先挑具备团队首选 CLI 的 Runner；没有再退到具备其它 CLI 的 Runner
     const candidates = runners.filter((item) =>
       item.online
-      && (item.capabilities.includes("codex") || item.capabilities.includes("workbuddy"))
+      && AI_ENGINE_ADAPTERS.some((adapter) => item.capabilities.includes(adapter))
       && item.workspaces.length
     );
     const runner = candidates.find((item) => item.capabilities.includes(preferredAdapter)) || candidates[0] || null;
@@ -1256,10 +1297,11 @@ export function registerLeadFinderRoutes(app: Express) {
     // 按选中 Runner 实际具备的适配器声明引擎：团队首选的 CLI 优先，没有就用另一个；
     // createTask 不传 adapter 时默认 codex，会在只装 WorkBuddy 的机器上误报「未检测到 CLI」。
     const preferredAdapter = engineSettings.cliAdapter;
-    const adapter = plan.runner.capabilities.includes(preferredAdapter) ? preferredAdapter : otherAiEngineAdapter(preferredAdapter);
+    const adapter = [preferredAdapter, ...aiEngineAdapterFallbacks(preferredAdapter)]
+      .find((item) => plan.runner.capabilities.includes(item)) ?? preferredAdapter;
     const task = await plan.service.createTask(req.user!, {
       runnerId: plan.runner.id,
-      prompt: applyCliProfileToPrompt(lfindPrompt(body, req.user!), engineCliProfile(engineSettings, adapter)),
+      prompt: applyCliProfileToPrompt(lfindPrompt(body, req.user!, adapter), engineCliProfile(engineSettings, adapter)),
       workspace: plan.runner.workspaces[0],
       adapter,
       executionMode: "read_only",

@@ -2,10 +2,11 @@
 import { hostname } from "node:os";
 import { codexCodeModeHost, resolveCodexBinary } from "./codex-adapter.js";
 import { resolveWorkbuddyBinary } from "./workbuddy-adapter.js";
+import { resolveClaudeBinary } from "./claude-adapter.js";
 import { browserServiceConfiguration, isBrowserCdpReady, isBrowserMcpReady, startBrowserService } from "./browser-service.js";
 import { GoodJobRunnerClient } from "./client.js";
 import { loadConfig, normalizeServerUrl, normalizeWorkspace, runnerConfigPath, saveConfig } from "./config.js";
-import { detectCodexVersion, detectWorkbuddyVersion, runnerCliIssue, runnerIdentity, RUNNER_VERSION, runOneClaim, startRunner } from "./runner.js";
+import { detectClaudeVersion, detectCodexVersion, detectWorkbuddyVersion, runnerCliIssue, runnerIdentity, RUNNER_VERSION, runOneClaim, startRunner } from "./runner.js";
 
 function values(args: string[], name: string) {
   const found: string[] = [];
@@ -39,10 +40,14 @@ async function main() {
     if (!code || !rawWorkspaces.length) throw new Error("配对需要 --code 和至少一个 --workspace");
     const workspaces = [...new Set(await Promise.all(rawWorkspaces.map(normalizeWorkspace)))];
     const identity = await runnerIdentity(workspaces);
-    if (!identity.codexVersion && !identity.workbuddyVersion) {
-      throw new Error("本机未检测到 Codex CLI 或 WorkBuddy CLI，请先安装其中之一");
+    if (!identity.codexVersion && !identity.workbuddyVersion && !identity.claudeVersion) {
+      throw new Error("本机未检测到 Codex CLI、WorkBuddy CLI 或 Claude Code CLI，请先安装其中之一");
     }
-    const cliLabel = identity.codexVersion && identity.workbuddyVersion ? "Codex + WorkBuddy" : identity.codexVersion ? "Codex" : "WorkBuddy";
+    const cliLabel = [
+      identity.codexVersion ? "Codex" : "",
+      identity.workbuddyVersion ? "WorkBuddy" : "",
+      identity.claudeVersion ? "Claude" : ""
+    ].filter(Boolean).join(" + ");
     const displayName = value(args, "--name") || `${hostname()} · ${cliLabel}`;
     const client = new GoodJobRunnerClient({ serverUrl });
     const paired = await client.pair({ ...identity, code, displayName });
@@ -59,6 +64,8 @@ async function main() {
     const codexBinary = resolveCodexBinary();
     const workbuddyVersion = await detectWorkbuddyVersion();
     const workbuddyBinary = resolveWorkbuddyBinary();
+    const claudeVersion = await detectClaudeVersion();
+    const claudeBinary = resolveClaudeBinary();
     const client = new GoodJobRunnerClient({ serverUrl: config.serverUrl, token: config.token });
     // 上报时带上 CLI 故障原因：`goodjob-runner status` 往往就是用户发现"CLI 到底能不能用"时跑的命令，
     // 顺手把结论同步给 CRM，集成中心和新增客户弹窗就能显示同一份原因。
@@ -68,6 +75,8 @@ async function main() {
     console.log(`Codex：${codexVersion || "未检测到"}`);
     console.log(`WorkBuddy CLI：${workbuddyVersion || "未检测到"}`);
     console.log(`WorkBuddy CLI 执行文件：${workbuddyBinary}`);
+    console.log(`Claude Code CLI：${claudeVersion || "未检测到"}`);
+    console.log(`Claude Code CLI 执行文件：${claudeBinary}`);
     // CLI 账号可以随时在外部切换（workbuddy switch 之类），CRM 只关心"这台机器上 CLI 到底能不能用"。
     // 探测失败时把原因打出来，省得用户去猜是没装、没登录还是符号链接悬空。
     const cliIssue = runnerCliIssue();

@@ -1,7 +1,7 @@
 export type LocalRunnerStatus = "active" | "revoked";
 export type LocalRunnerTaskStatus = "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export type LocalRunnerExecutionMode = "read_only" | "workspace_write";
-export type LocalRunnerAdapter = "codex" | "workbuddy";
+export type LocalRunnerAdapter = "codex" | "workbuddy" | "claude";
 
 export interface LocalRunnerPairing {
   id: string;
@@ -29,6 +29,7 @@ export interface LocalRunner {
   runnerVersion: string;
   codexVersion: string;
   workbuddyVersion: string;
+  claudeVersion: string;
   capabilities: string[];
   workspaces: string[];
   lastSeenAt: string;

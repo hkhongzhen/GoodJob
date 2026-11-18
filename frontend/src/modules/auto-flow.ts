@@ -1057,6 +1057,11 @@ function autoFlowCompleteStep(key: string) {
   autoFlowLog("done", `${step?.title || key} 完成：${step?.output || ""}`);
   autoFlowWrite();
   autoFlowSync();
+  // 节点刚产出了新数据，而「当前 N 家 / 结果 N」只在进入页面时读过一次（页头会一直停在旧时间）。
+  // 不重读就会出现「获客已完成、结果 0，却继续背调」的假象（2026-11-13 实测：库里已有 5 家候选，
+  // 卡片还显示进入页面时的 0）。这里清掉结果缓存并强制重读一次，让计数跟着流程走。
+  autoFlowResults = {};
+  void loadAutoFlowLive();
 
   const next = AUTO_FLOW_STEPS.find((item) => state.status[item.key] !== "done");
   if (next && state.stepMode) {
@@ -1201,6 +1206,20 @@ async function autoFlowRunProspect(token: number) {
   }
 }
 
+/** 把候选加入搜客清单（与搜客页「加入搜客清单」同一个接口）。失败只记日志，不拖垮流程。 */
+async function autoFlowShortlist(ids: string[], token: number) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return;
+  try {
+    await api("/api/prospect-list/batch", { method: "PATCH", body: JSON.stringify({ ids: unique, action: "shortlist" }) });
+    if (token !== autoFlowRunToken) return;
+    autoFlowLog("done", `已把 ${unique.length} 家背调通过的候选加入搜客清单`);
+  } catch (error) {
+    if (token !== autoFlowRunToken) return;
+    autoFlowLog("warn", `加入搜客清单失败：${error instanceof Error ? error.message : "未知错误"}（可去搜客页手动勾选加入）`);
+  }
+}
+
 // ---------- 节点 2 · 背调：引擎 CLI / AI，逐家出证据 ----------
 async function autoFlowRunResearch(token: number) {
   const state = autoFlowEnsure();
@@ -1253,6 +1272,10 @@ async function autoFlowRunResearch(token: number) {
   const okCount = targets.filter((target) => artifacts.researched[target.id]).length;
   if (!okCount) throw new Error("本轮背调全部失败，请检查引擎配置后重试");
   autoFlowLog("done", `背调完成 ${okCount}/${targets.length} 家，够格进写信`);
+  // 背调通过的候选自动加入搜客清单（搜客清单 = 被「加入搜客清单」过的候选，它是显式动作，
+  // 自动流以前从不执行，所以流程跑完清单里还是空的）。放在循环之后统一做：
+  // 重试 / 续跑时被 `researched` 跳过的那些也要补上。
+  await autoFlowShortlist(targets.filter((target) => artifacts.researched[target.id]).map((target) => target.id), token);
   autoFlowResults = {};
   autoFlowCompleteStep("research");
 }

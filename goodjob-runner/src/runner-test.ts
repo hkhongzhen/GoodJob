@@ -7,6 +7,7 @@ import path from "node:path";
 import { browserServiceConfiguration, isBrowserCdpReady, isBrowserMcpReady, isBrowserServiceReachable, startBrowserService, tryStartBrowserService } from "./browser-service.js";
 import { codexCodeModeHost, executeCodexTask, parseCodexCliProfile, resolveCodexBinary } from "./codex-adapter.js";
 import { execFileSync } from "node:child_process";
+import { claudeModelAllowed, claudePermissionArgs, claudeProcessEnvironment, executeClaudeTask, parseClaudeCliProfile, resolveClaudeBinary } from "./claude-adapter.js";
 import { executeWorkbuddyTask, parseWorkbuddyCliProfile, resolveWorkbuddyBinary, workbuddyProcessEnvironment, workbuddySkillDirs, STRIPPED_ENVIRONMENT_PREFIXES } from "./workbuddy-adapter.js";
 import { cachedRunnerIdentity, cliDetectionSnapshot, detectRunnerClis, resetRunnerCliCache, runnerCliIssue, runnerIdentity } from "./runner.js";
 
@@ -110,7 +111,10 @@ if (process.platform === "darwin") {
   // 本机 codex 版本可能不带 codex-code-mode-host（2026-10-10 实测 0.144.0 就没有）。
   // 这种环境缺口不该把整个套件卡死在这里：CRM 的 CLI 任务走 WorkBuddy 适配器，
   // 下面那些 WorkBuddy 断言与 codex 无关。装齐了的机器上这条断言仍然照常执行。
-  if (existsSync(resolved) && !codexCodeModeHost(resolved)) {
+  if (!existsSync(resolved)) {
+    // 本机根本没装 Codex（例如 Intel Mac 的 brew 在 /usr/local，或只用 WorkBuddy / Claude Code）：环境缺口，同样不该卡死整套测试
+    console.warn(`[runner-test] 跳过 Codex code-mode-host 断言：本机未安装 Codex CLI（${resolved}）`);
+  } else if (!codexCodeModeHost(resolved)) {
     console.warn(`[runner-test] 跳过 Codex code-mode-host 断言：${resolved} 所在安装未提供 codex-code-mode-host（本机 codex 版本差异，不影响 WorkBuddy CLI 任务）`);
   } else {
     assert.ok(codexCodeModeHost(resolved), `Codex 工具宿主缺失：${resolved}`);
@@ -401,30 +405,30 @@ assert.equal(resolveWorkbuddyBinary("/custom/codebuddy"), "/custom/codebuddy");
 resetRunnerCliCache();
 let codexProbes = 0;
 let workbuddyProbes = 0;
-const firstDetection = await detectRunnerClis({
+const firstDetection = await detectRunnerClis({ detectClaude: async () => "",
   detectCodex: async () => { codexProbes += 1; return "codex 1.0.0"; },
   detectWorkbuddy: async () => { workbuddyProbes += 1; return "codebuddy 2.156.0"; }
 });
-assert.deepEqual(firstDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0" });
-await detectRunnerClis({
+assert.deepEqual(firstDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0", claudeVersion: "" });
+await detectRunnerClis({ detectClaude: async () => "",
   detectCodex: async () => { codexProbes += 1; return "codex 9.9.9"; },
   detectWorkbuddy: async () => { workbuddyProbes += 1; return "codebuddy 9.9.9"; }
 });
 assert.equal(codexProbes, 1, "TTL 内必须复用缓存，不得重复启动 CLI");
 assert.equal(workbuddyProbes, 1, "TTL 内必须复用缓存，不得重复启动 CLI");
-const flakyDetection = await detectRunnerClis({
+const flakyDetection = await detectRunnerClis({ detectClaude: async () => "",
   force: true,
   detectCodex: async () => { throw new Error("probe timeout"); },
   detectWorkbuddy: async () => { throw new Error("probe timeout"); }
 });
-assert.deepEqual(flakyDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0" },
+assert.deepEqual(flakyDetection, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.156.0", claudeVersion: "" },
   "单次探测失败必须保留上一次检测到的版本与能力");
 for (let attempt = 0; attempt < 3; attempt += 1) {
-  await detectRunnerClis({ force: true, detectCodex: async () => "", detectWorkbuddy: async () => "" });
+  await detectRunnerClis({ detectClaude: async () => "", force: true, detectCodex: async () => "", detectWorkbuddy: async () => "" });
 }
 assert.deepEqual(
-  await detectRunnerClis({ force: true, detectCodex: async () => "", detectWorkbuddy: async () => "" }),
-  { codexVersion: "", workbuddyVersion: "" },
+  await detectRunnerClis({ detectClaude: async () => "", force: true, detectCodex: async () => "", detectWorkbuddy: async () => "" }),
+  { codexVersion: "", workbuddyVersion: "", claudeVersion: "" },
   "连续失败达阈值后必须承认 CLI 已不在，不能一直挂着不可用的能力"
 );
 
@@ -434,14 +438,14 @@ const droppedSnapshot = cliDetectionSnapshot();
 assert.ok(droppedSnapshot && droppedSnapshot.regressedAt > 0, "能力掉线后必须进入快速重探窗口");
 let recoveryProbes = 0;
 await new Promise((resolve) => setTimeout(resolve, 30));
-const recovered = await detectRunnerClis({
+const recovered = await detectRunnerClis({ detectClaude: async () => "",
   ttlMs: undefined,
   recoveryTtlMs: 10,
   detectCodex: async () => { recoveryProbes += 1; return "codex 1.0.0"; },
   detectWorkbuddy: async () => { recoveryProbes += 1; return "codebuddy 2.160.0"; }
 });
 assert.equal(recoveryProbes, 2, "掉线窗口内必须重新探测，而不是死等 5 分钟 TTL");
-assert.deepEqual(recovered, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.160.0" },
+assert.deepEqual(recovered, { codexVersion: "codex 1.0.0", workbuddyVersion: "codebuddy 2.160.0", claudeVersion: "" },
   "CLI 一恢复，能力就要立刻回来");
 assert.equal(cliDetectionSnapshot()?.regressedAt, 0, "恢复后必须退出快速重探窗口");
 assert.equal(runnerCliIssue(), "", "CLI 正常时不得上报故障");
@@ -506,6 +510,145 @@ const degradedBrowser = await tryStartBrowserService({
 assert.equal(degradedBrowser.service, null, "浏览器端口被占用时必须降级返回，绝不能抛错杀死 Runner");
 assert.match(degradedBrowser.error, /已被占用/, "降级原因必须可读，便于在心跳里上报");
 await new Promise<void>((resolve) => occupyingListener.close(() => resolve()));
+
+
+// —— Claude Code CLI 适配器 ——
+const claudeInvocationFile = path.join(root, "claude-invocation.json");
+const fakeClaude = path.join(root, "fake-claude.mjs");
+await writeFile(fakeClaude, `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+let prompt = "";
+process.stdin.resume();
+process.stdin.on("data", (chunk) => { prompt += chunk.toString("utf8"); });
+process.stdin.on("end", () => {
+  writeFileSync(${JSON.stringify(claudeInvocationFile)}, JSON.stringify({
+    argv: process.argv.slice(2),
+    prompt,
+    nodeOptions: process.env.NODE_OPTIONS || "",
+    claudecode: process.env.CLAUDECODE || "",
+    entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || "",
+    oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
+    proxy: process.env.HTTPS_PROXY || "",
+    noProxy: process.env.NO_PROXY || ""
+  }));
+  console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "cl_session_1", model: "claude-sonnet-5-5" }));
+  console.log(JSON.stringify({ type: "assistant", session_id: "cl_session_1", message: { content: [
+    { type: "tool_use", name: "WebSearch", input: { query: "gj test" } },
+    { type: "text", text: "Claude 已接通" }
+  ] } }));
+  console.log(JSON.stringify({ type: "rate_limit_event", rate_limit_info: { status: "allowed" } }));
+  console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: "cl_session_1", result: "Claude 已接通" }));
+});
+`, { mode: 0o700 });
+await chmod(fakeClaude, 0o700);
+
+// 模型与档位：别名 / 完整 ID 可用，非法字符与未知档位被忽略；minimal 收敛为 low
+assert.equal(claudeModelAllowed("sonnet"), true);
+assert.equal(claudeModelAllowed("claude-opus-5-5"), true);
+assert.equal(claudeModelAllowed("opus[1m]"), true);
+assert.equal(claudeModelAllowed("sonnet; rm -rf /"), false);
+assert.equal(claudeModelAllowed(""), false);
+const claudeProfile = parseClaudeCliProfile('[[gj-cli-options {"effort":"minimal","model":"haiku","maxTurns":3,"disallowedTools":["Write","Edit"]}]]\n正文');
+assert.equal(claudeProfile.prompt, "正文");
+assert.deepEqual(claudeProfile.profile, { effort: "low", model: "haiku", maxTurns: 3, disallowedTools: ["Write", "Edit"] });
+assert.equal(parseClaudeCliProfile('[[gj-cli-options {"model":"bad model!"}]]\nx').profile.model, "", "非法模型必须被忽略");
+// WorkBuddy 的模型白名单不得泄漏到 Claude，反之亦然
+assert.equal(parseWorkbuddyCliProfile('[[gj-cli-options {"model":"sonnet"}]]\nx').profile.model, "", "WorkBuddy 不认 Claude 别名");
+
+// 子进程环境：剔除宿主会话变量，但保留登录凭据与代理（Claude 出网常需要代理）
+const claudeEnv = claudeProcessEnvironment({
+  PATH: "/usr/bin", HOME: "/Users/x", NODE_OPTIONS: "--require /host/patch.js",
+  CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_CODE_SSE_PORT: "12345", CLAUDE_CODE_EXECPATH: "/host/claude",
+  CLAUDE_CODE_OAUTH_TOKEN: "oauth-keep", CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_API_KEY: "key-keep",
+  HTTPS_PROXY: "http://127.0.0.1:7890"
+});
+assert.equal(claudeEnv.NODE_OPTIONS, undefined);
+assert.equal(claudeEnv.CLAUDECODE, undefined);
+assert.equal(claudeEnv.CLAUDE_CODE_ENTRYPOINT, undefined);
+assert.equal(claudeEnv.CLAUDE_CODE_SSE_PORT, undefined);
+assert.equal(claudeEnv.CLAUDE_CODE_EXECPATH, undefined);
+assert.equal(claudeEnv.CLAUDE_CODE_OAUTH_TOKEN, "oauth-keep", "OAuth 登录凭据必须保留");
+assert.equal(claudeEnv.CLAUDE_CODE_USE_BEDROCK, "1", "供应商选择必须保留");
+assert.equal(claudeEnv.ANTHROPIC_API_KEY, "key-keep", "API Key 登录方式必须保留");
+assert.equal(claudeEnv.HTTPS_PROXY, "http://127.0.0.1:7890", "本机代理必须保留：Claude 出网常依赖它");
+assert.equal(claudeEnv.NO_PROXY, undefined, "不得像 WorkBuddy 那样强制直连");
+assert.equal(resolveClaudeBinary("/custom/claude"), "/custom/claude", "显式配置必须优先");
+
+const claudeSavedEnv: Record<string, string | undefined> = {};
+for (const [key, value] of Object.entries({
+  NODE_OPTIONS: "--require /host/patch.js", CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli",
+  CLAUDE_CODE_OAUTH_TOKEN: "oauth-keep", HTTPS_PROXY: "http://127.0.0.1:7890"
+})) {
+  claudeSavedEnv[key] = process.env[key];
+  process.env[key] = value;
+}
+const claudeEvents: Array<{ message: string; eventType: string; stage: unknown }> = [];
+const claudeResult = await executeClaudeTask({
+  id: "task_claude", runnerId: "runner_test", adapter: "claude",
+  prompt: '[[gj-cli-options {"effort":"minimal","model":"sonnet","maxTurns":4,"disallowedTools":["Write","Edit"]}]]\n你好 Claude',
+  workspace: root, executionMode: "read_only", timeoutSeconds: 60, status: "running"
+}, {
+  allowedWorkspaces: [root], signal: new AbortController().signal, claudeBinary: fakeClaude,
+  async onEvent(event) { claudeEvents.push({ message: event.message, eventType: event.eventType, stage: event.payload?.stage }); }
+});
+for (const [key, value] of Object.entries(claudeSavedEnv)) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+assert.equal(claudeResult.status, "succeeded");
+assert.equal(claudeResult.resultText, "Claude 已接通");
+assert.equal(claudeResult.codexThreadId, "cl_session_1");
+assert.ok(claudeEvents.some((item) => item.message.includes("WebSearch")), "工具调用必须转成进度事件");
+assert.ok(
+  claudeEvents.some((item) => item.message.includes("Claude Code CLI 会话已建立") && item.message.includes("claude-sonnet-5-5")),
+  "会话事件必须用 Claude Code CLI 的名字并带上自报模型"
+);
+const claudeInvocation = JSON.parse(await readFile(claudeInvocationFile, "utf8")) as {
+  argv: string[]; prompt: string; nodeOptions: string; claudecode: string; entrypoint: string; oauth: string; proxy: string; noProxy: string;
+};
+assert.deepEqual(claudeInvocation.argv, [
+  "--print", "--output-format", "stream-json", "--verbose", "--safe-mode",
+  "--no-session-persistence",
+  // 只读 = dontAsk + 只读工具白名单；禁用列表 = 只读基线（Write/Edit/NotebookEdit/Bash）∪ 任务点名的，不重复传
+  "--permission-mode", "dontAsk", "--allowedTools", "WebSearch,WebFetch,Read,Glob,Grep",
+  "--disallowedTools", "Write,Edit,NotebookEdit,Bash",
+  "--effort", "low", "--model", "sonnet", "--max-turns", "4"
+]);
+assert.equal(claudeInvocation.argv.filter((item) => item === "--disallowedTools").length, 1, "--disallowedTools 只能出现一次");
+assert.ok(!claudeInvocation.argv.includes("plan"), "Claude 不用 plan 模式：它会让模型拒绝执行任务");
+assert.equal(claudeInvocation.prompt, "你好 Claude", "标记行必须被剥掉，正文走 stdin");
+assert.equal(claudeInvocation.nodeOptions, "");
+assert.equal(claudeInvocation.claudecode, "", "宿主会话变量不得泄漏给任务");
+assert.equal(claudeInvocation.entrypoint, "");
+assert.equal(claudeInvocation.oauth, "oauth-keep");
+assert.equal(claudeInvocation.proxy, "http://127.0.0.1:7890");
+assert.notEqual(claudeInvocation.noProxy, "*", "不得像 WorkBuddy 那样强制 NO_PROXY=*（Claude 出网常需代理）");
+// 适配器守卫：不能把别的适配器的任务交给 Claude
+await assert.rejects(
+  executeClaudeTask({
+    id: "task_wrong", runnerId: "runner_test", adapter: "workbuddy", prompt: "x",
+    workspace: root, executionMode: "read_only", timeoutSeconds: 60, status: "running"
+  }, { allowedWorkspaces: [root], signal: new AbortController().signal, claudeBinary: fakeClaude, async onEvent() {} }),
+  /Claude Code 适配器/
+);
+// 可写模式才放开编辑权限
+await executeClaudeTask({
+  id: "task_claude_write", runnerId: "runner_test", adapter: "claude", prompt: "x",
+  workspace: root, executionMode: "workspace_write", timeoutSeconds: 60, status: "running"
+}, { allowedWorkspaces: [root], signal: new AbortController().signal, claudeBinary: fakeClaude, async onEvent() {} });
+const claudeWriteInvocation = JSON.parse(await readFile(claudeInvocationFile, "utf8")) as { argv: string[] };
+assert.equal(claudeWriteInvocation.argv[claudeWriteInvocation.argv.indexOf("--permission-mode") + 1], "acceptEdits");
+assert.equal(claudeWriteInvocation.argv[claudeWriteInvocation.argv.indexOf("--allowedTools") + 1], "WebSearch,WebFetch,Read,Glob,Grep,Write,Edit", "可写任务才放行 Write/Edit");
+assert.equal(claudeWriteInvocation.argv[claudeWriteInvocation.argv.indexOf("--disallowedTools") + 1], "Bash", "任何模式都不放 Bash");
+// 任务点名禁用的工具：从放行里剔掉
+assert.deepEqual(claudePermissionArgs("read_only", { disallowedTools: ["WebFetch"] }).slice(2),
+  ["--allowedTools", "WebSearch,Read,Glob,Grep", "--disallowedTools", "Write,Edit,NotebookEdit,Bash,WebFetch"]);
+
+// 探测：Claude 能力进入 capabilities；缺失时不进
+resetRunnerCliCache();
+const claudeDetection = await detectRunnerClis({ detectCodex: async () => "", detectWorkbuddy: async () => "", detectClaude: async () => "2.1.322 (Claude Code)" });
+assert.deepEqual(claudeDetection, { codexVersion: "", workbuddyVersion: "", claudeVersion: "2.1.322 (Claude Code)" });
+resetRunnerCliCache();
 
 await rm(root, { recursive: true, force: true });
 console.log(JSON.stringify({ ok: true, fakeCodexClosedLoop: true, structuredSpawn: true, browserMcpInjected: true, browserServiceLoopbackOnly: true, liveWorkflowCaptured: true, finalReplyIsLatestMessage: true, completedTurnStopsPromptly: true, workbuddyStreamJson: true, workbuddyPermissionMode: true, workbuddyEnvIsolation: true, workbuddySkillDirsInjected: true, workbuddyFailureSurfaced: true, workbuddyGuards: true, cliDetectionCachedAndSticky: true, browserFailureDegrades: true }, null, 2));

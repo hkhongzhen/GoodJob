@@ -34,13 +34,14 @@ function normalizedWorkspaces(input: string[]) {
   return [...new Set(input.map((item) => item.trim()).filter((item) => /^(?:\/|[A-Za-z]:[\\/]|\\\\)/u.test(item) && item.length <= 1000))].slice(0, 20);
 }
 
-/** 本地 Runner 支持的能力：codex（含独立浏览器）、workbuddy（WorkBuddy CLI） */
+/** 本地 Runner 支持的能力：codex（含独立浏览器）、workbuddy（WorkBuddy CLI）、claude（Claude Code CLI） */
 const knownCapabilities = (input: string[]) => [
-  ...new Set(input.filter((item) => item === "codex" || item === "browser" || item === "workbuddy"))
+  ...new Set(input.filter((item) => item === "codex" || item === "browser" || item === "workbuddy" || item === "claude"))
 ];
 
 /** 任务适配器 → 展示名 */
-const adapterLabel = (adapter: LocalRunnerAdapter) => adapter === "workbuddy" ? "WorkBuddy CLI" : "Codex CLI";
+const adapterLabel = (adapter: LocalRunnerAdapter) =>
+  adapter === "workbuddy" ? "WorkBuddy CLI" : adapter === "claude" ? "Claude Code CLI" : "Codex CLI";
 
 function publicRunner(runner: LocalRunner) {
   const online = runner.status === "active" && Boolean(runner.lastSeenAt)
@@ -49,7 +50,7 @@ function publicRunner(runner: LocalRunner) {
     id: runner.id, teamId: runner.teamId, ownerId: runner.ownerId, displayName: runner.displayName,
     status: runner.status, online, hostname: runner.hostname, platform: runner.platform,
     runnerVersion: runner.runnerVersion, codexVersion: runner.codexVersion,
-    workbuddyVersion: runner.workbuddyVersion,
+    workbuddyVersion: runner.workbuddyVersion, claudeVersion: runner.claudeVersion,
     capabilities: runner.capabilities, workspaces: runner.workspaces, lastSeenAt: runner.lastSeenAt,
     lastError: runner.lastError, createdAt: runner.createdAt, updatedAt: runner.updatedAt,
     revokedAt: runner.revokedAt
@@ -93,7 +94,7 @@ export class LocalRunnerService {
 
   async pair(input: {
     code: string; displayName: string; hostname: string; platform: string; runnerVersion: string;
-    codexVersion: string; workbuddyVersion: string; capabilities: string[]; workspaces: string[];
+    codexVersion: string; workbuddyVersion: string; claudeVersion?: string; capabilities: string[]; workspaces: string[];
   }) {
     const runnerId = `lrr_${randomUUID()}`;
     const secret = randomBytes(32).toString("base64url");
@@ -105,6 +106,7 @@ export class LocalRunnerService {
       hostname: input.hostname.slice(0, 200), platform: input.platform.slice(0, 80),
       runnerVersion: input.runnerVersion.slice(0, 40), codexVersion: input.codexVersion.slice(0, 80),
       workbuddyVersion: input.workbuddyVersion.slice(0, 80),
+      claudeVersion: (input.claudeVersion ?? "").slice(0, 80),
       capabilities: knownCapabilities(input.capabilities),
       workspaces: normalizedWorkspaces(input.workspaces), lastSeenAt: createdAt, lastError: "",
       createdAt, updatedAt: createdAt, revokedAt: ""
@@ -137,7 +139,7 @@ export class LocalRunnerService {
   }
 
   async heartbeat(runner: LocalRunner, input: {
-    hostname?: string; platform?: string; runnerVersion?: string; codexVersion?: string; workbuddyVersion?: string;
+    hostname?: string; platform?: string; runnerVersion?: string; codexVersion?: string; workbuddyVersion?: string; claudeVersion?: string;
     capabilities?: string[]; workspaces?: string[]; lastError?: string; taskId?: string; leaseToken?: string;
   }) {
     const reportedWorkspaces = input.workspaces ? normalizedWorkspaces(input.workspaces) : undefined;
@@ -147,6 +149,7 @@ export class LocalRunnerService {
       hostname: input.hostname?.slice(0, 200), platform: input.platform?.slice(0, 80),
       runnerVersion: input.runnerVersion?.slice(0, 40), codexVersion: input.codexVersion?.slice(0, 80),
       workbuddyVersion: input.workbuddyVersion?.slice(0, 80),
+      claudeVersion: input.claudeVersion?.slice(0, 80),
       capabilities: reportedCapabilities,
       workspaces: reducedWorkspaces?.length ? reducedWorkspaces : undefined,
       lastError: input.lastError?.slice(0, 1000)
@@ -166,11 +169,12 @@ export class LocalRunnerService {
     if (!runner.workspaces.includes(input.workspace)) {
       serviceError("LOCAL_RUNNER_WORKSPACE_DENIED", "该工作目录未在本机 Runner 授权范围内", 403);
     }
-    const adapter: LocalRunnerAdapter = input.adapter === "workbuddy" ? "workbuddy" : "codex";
+    const adapter: LocalRunnerAdapter = input.adapter === "workbuddy" || input.adapter === "claude" ? input.adapter : "codex";
     if (!runner.capabilities.includes(adapter)) {
       serviceError(
-        adapter === "workbuddy" ? "LOCAL_RUNNER_WORKBUDDY_UNAVAILABLE" : "LOCAL_RUNNER_CODEX_UNAVAILABLE",
-        adapter === "workbuddy" ? "该 Runner 未检测到 WorkBuddy CLI" : "该 Runner 未检测到 Codex CLI",
+        adapter === "workbuddy" ? "LOCAL_RUNNER_WORKBUDDY_UNAVAILABLE"
+          : adapter === "claude" ? "LOCAL_RUNNER_CLAUDE_UNAVAILABLE" : "LOCAL_RUNNER_CODEX_UNAVAILABLE",
+        `该 Runner 未检测到 ${adapterLabel(adapter)}`,
         409
       );
     }

@@ -4,8 +4,10 @@ import { homedir, platform as osPlatform } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import {
+  AI_ENGINE_CLAUDE_MODEL_DEFAULT,
+  AI_ENGINE_CLAUDE_MODEL_PATTERN,
   AI_ENGINE_CODEX_MODEL_DEFAULT,
-  otherAiEngineAdapter,
+  aiEngineAdapterFallbacks,
   readTeamAiEngineSettings,
   type AiEngineAdapter
 } from "./ai-engine-settings.js";
@@ -216,9 +218,59 @@ export function resolveCodexCliBinary(extraPath = ""): string {
   return "codex";
 }
 
+// ---------------------------------------------------------------------------
+// Claude Code CLI 直连（订阅登录，不需要 API Key）
+//
+// 与 Runner 的 claude-adapter 同一种调用：`claude -p --output-format stream-json --verbose`，
+// 事件格式与 WorkBuddy 同族，直接复用 parseCliStream。差异：
+//  - stream-json 在 --print 下必须带 --verbose；
+//  - --safe-mode 关掉 CLAUDE.md / hooks / MCP / 插件 / 用户技能，避免本机个人配置在后端任务里被执行；
+//  - 环境只剔除宿主 Claude Code 会话变量，**不**剔除代理（Claude 出网常需要代理）。
+// ---------------------------------------------------------------------------
+
+/** 解析 Claude Code 可执行文件：显式指定 > GOODJOB_CLAUDE_BIN > PATH 里的 claude > 常见安装位置 > 裸名字 */
+export function resolveClaudeCliBinary(extraPath = ""): string {
+  const explicit = extraPath.trim() || String(process.env.GOODJOB_CLAUDE_BIN || "").trim();
+  if (explicit && existsSync(explicit)) return explicit;
+  for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, "claude");
+    if (existsSync(candidate)) return candidate;
+  }
+  const home = homedir();
+  for (const candidate of [
+    path.join(home, ".local", "bin", "claude"),
+    path.join(home, ".claude", "local", "claude"),
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    path.join(home, ".npm-global", "bin", "claude")
+  ]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "claude";
+}
+
+const CLAUDE_STRIPPED_KEYS = ["NODE_OPTIONS", "BASH_ENV", "TRACEPARENT", "BAGGAGE", "ELECTRON_RUN_AS_NODE", "CLAUDECODE", "CLAUDE_SESSION_ID"];
+/** CLAUDE_CODE_* 整族是宿主会话变量，但这几个是登录 / 供应商选择，必须保留 */
+const CLAUDE_KEPT_KEYS = new Set([
+  "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_SKIP_BEDROCK_AUTH", "CLAUDE_CODE_SKIP_VERTEX_AUTH", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS"
+]);
+
+export function claudeCliProcessEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...source };
+  for (const key of CLAUDE_STRIPPED_KEYS) delete environment[key];
+  for (const key of Object.keys(environment)) {
+    if (key.startsWith("CLAUDE_CODE_") && !CLAUDE_KEPT_KEYS.has(key)) delete environment[key];
+  }
+  return { ...environment, NO_COLOR: "1", FORCE_COLOR: "0" };
+}
+
 /** 这台机器上某个 CLI 是否装着（能解析到一个真实存在的可执行文件） */
 export function directCliAvailable(adapter: AiEngineAdapter): boolean {
-  const binary = adapter === "codex" ? resolveCodexCliBinary() : resolveCliBinary();
+  const binary = adapter === "codex" ? resolveCodexCliBinary()
+    : adapter === "claude" ? resolveClaudeCliBinary()
+      : resolveCliBinary();
   return binary.includes(path.sep) && existsSync(binary);
 }
 
@@ -231,8 +283,7 @@ export function resolveDirectCliAdapter(
   available: (adapter: AiEngineAdapter) => boolean = directCliAvailable
 ): AiEngineAdapter {
   if (available(preferred)) return preferred;
-  const other = otherAiEngineAdapter(preferred);
-  return available(other) ? other : preferred;
+  return aiEngineAdapterFallbacks(preferred).find((adapter) => available(adapter)) ?? preferred;
 }
 
 /** 把 `codex exec --json` 的 JSONL 事件解析成终态 */
@@ -339,6 +390,77 @@ async function runCodexSummary(
   return { text: parsed.text, model: model || "Codex 默认模型", durationMs: Date.now() - started };
 }
 
+async function runClaudeSummary(
+  prompt: string,
+  options: { timeoutMs: number; binary?: string; model?: string; effort?: string }
+): Promise<CliSummaryResult> {
+  const binary = resolveClaudeCliBinary(options.binary ?? "");
+  if (binary.includes("/") && !existsSync(binary)) {
+    throw new Error(`本机 Claude Code CLI 不存在（${binary}）`);
+  }
+  const model = String(options.model || "").trim();
+  // Claude 没有 minimal 档：按 low 执行
+  const effortMap: Record<string, string> = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
+  const effort = effortMap[String(options.effort || "").trim().toLowerCase()] || "";
+  const args = [
+    "--print",
+    "--output-format", "stream-json",
+    "--verbose", "--safe-mode",
+    "--no-session-persistence",
+    "--permission-mode", "plan",
+    "--max-turns", "2",
+    "--disallowedTools", [...CLI_DISALLOWED_TOOLS, "Task"].join(","),
+    ...(model && AI_ENGINE_CLAUDE_MODEL_PATTERN.test(model) ? ["--model", model] : []),
+    ...(effort ? ["--effort", effort] : [])
+  ];
+  const started = Date.now();
+  const child = spawn(binary, args, {
+    cwd: ensureWorkspace(),
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: claudeCliProcessEnvironment()
+  });
+  const lines: string[] = [];
+  let stderr = "";
+  const output = readline.createInterface({ input: child.stdout });
+  output.on("line", (line) => {
+    if (lines.length < 5_000) lines.push(line);
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr = `${stderr}${chunk.toString("utf8")}`.slice(0, 8_000);
+  });
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    if (child.exitCode !== null) return;
+    child.kill("SIGTERM");
+    const force = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 3_000);
+    force.unref();
+  }, options.timeoutMs);
+  timeout.unref();
+  child.stdin.on("error", () => undefined);
+  child.stdin.end(prompt);
+  const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>((resolve) => {
+    child.once("error", (error) => resolve({ code: null, signal: null, error }));
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  clearTimeout(timeout);
+  output.close();
+  if (timedOut) throw new Error(`本机 Claude Code CLI 执行超过 ${Math.round(options.timeoutMs / 1_000)} 秒，已停止`);
+  if (exit.error) {
+    if ((exit.error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`本机 Claude Code CLI 不存在（未找到可执行文件 ${binary}；请安装 Claude Code，或用 GOODJOB_CLAUDE_BIN 指定路径）`);
+    }
+    throw new Error(`本机 Claude Code CLI 无法启动（${binary}）：${exit.error.message}`);
+  }
+  const parsed = parseCliStream(lines);
+  if (parsed.failed) throw new Error(redact(parsed.error || stderr.trim() || `本机 Claude Code CLI 退出码 ${exit.code ?? exit.signal ?? "未知"}`));
+  if (!parsed.text.trim()) {
+    throw new Error(redact(stderr.trim() || "本机 Claude Code CLI 没有返回任何内容（常见原因：未登录，可在终端运行 claude 后输入 /login）"));
+  }
+  return { text: parsed.text, model: parsed.model || model || "Claude 默认模型", durationMs: Date.now() - started };
+}
+
 export interface CliSummaryOptions {
   timeoutMs?: number;
   binary?: string;
@@ -357,11 +479,19 @@ export async function runCliSummary(prompt: string, options: CliSummaryOptions =
   let adapter: AiEngineAdapter = options.adapter ?? "workbuddy";
   let codexModel = AI_ENGINE_CODEX_MODEL_DEFAULT;
   let codexEffort = "";
+  let claudeModel = AI_ENGINE_CLAUDE_MODEL_DEFAULT;
+  let claudeEffort = "";
   if (!options.adapter && options.teamId) {
     const settings = await readTeamAiEngineSettings(options.teamId);
     adapter = resolveDirectCliAdapter(settings.cliAdapter);
     codexModel = settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT;
     codexEffort = settings.codexEffort ?? "";
+    claudeModel = settings.claudeModel ?? AI_ENGINE_CLAUDE_MODEL_DEFAULT;
+    claudeEffort = settings.claudeEffort ?? "";
+  }
+  if (adapter === "claude") {
+    // 总结类任务讲究快：没配思考档位时用 low
+    return runClaudeSummary(prompt, { timeoutMs, binary: options.binary, model: claudeModel, effort: claudeEffort || "low" });
   }
   if (adapter === "codex") {
     // 总结类任务讲究快：没配思考档位时用 low

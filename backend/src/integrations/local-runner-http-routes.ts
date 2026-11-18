@@ -55,6 +55,7 @@ const agentIdentity = z.object({
   runnerVersion: z.string().trim().max(40).default(""),
   codexVersion: z.string().trim().max(80).default(""),
   workbuddyVersion: z.string().trim().max(80).default(""),
+  claudeVersion: z.string().trim().max(80).default(""),
   capabilities: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   workspaces: z.array(z.string().trim().min(1).max(1000)).max(20).default([])
 });
@@ -144,7 +145,7 @@ webRouter.get("/local-runner-tasks", handle(async (req, res) => {
 webRouter.post("/local-runner-tasks", handle(async (req, res) => {
   const body = z.object({
     runnerId: z.string().min(1).max(64),
-    adapter: z.enum(["codex", "workbuddy"]).default("codex"),
+    adapter: z.enum(["codex", "workbuddy", "claude"]).default("codex"),
     prompt: z.string().trim().min(1).max(20_000),
     workspace: z.string().min(1).max(1000),
     executionMode: z.enum(["read_only", "workspace_write"]).default("read_only"),

@@ -36,7 +36,7 @@ export interface LocalRunnerRepository {
   consumePairing(input: ConsumePairingInput): Promise<LocalRunnerPairing | null>;
   getRunner(id: string): Promise<LocalRunner | null>;
   listRunners(visibility: LocalRunnerVisibility): Promise<LocalRunner[]>;
-  touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "workbuddyVersion" | "capabilities" | "workspaces" | "lastError">>): Promise<boolean>;
+  touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "workbuddyVersion" | "claudeVersion" | "capabilities" | "workspaces" | "lastError">>): Promise<boolean>;
   revokeRunner(id: string): Promise<boolean>;
   createTask(task: LocalRunnerTask): Promise<void>;
   getTask(id: string): Promise<LocalRunnerTask | null>;
@@ -61,7 +61,7 @@ interface PairingRow extends RowDataPacket {
 interface RunnerRow extends RowDataPacket {
   id: string; team_id: string; owner_id: string; display_name: string; runner_status: LocalRunnerStatus;
   token_hash: string; token_fingerprint: string; hostname: string; platform_name: string;
-  runner_version: string; codex_version: string; workbuddy_version: string; capabilities_json: unknown; workspaces_json: unknown;
+  runner_version: string; codex_version: string; workbuddy_version: string; claude_version: string; capabilities_json: unknown; workspaces_json: unknown;
   last_seen_at: Date | null; last_error: string; created_at: Date; updated_at: Date; revoked_at: Date | null;
 }
 
@@ -108,6 +108,7 @@ function mapRunner(row: RunnerRow): LocalRunner {
     status: row.runner_status, tokenHash: row.token_hash, tokenFingerprint: row.token_fingerprint,
     hostname: row.hostname, platform: row.platform_name, runnerVersion: row.runner_version,
     codexVersion: row.codex_version, workbuddyVersion: row.workbuddy_version || "",
+    claudeVersion: row.claude_version || "",
     capabilities: jsonArray(row.capabilities_json),
     workspaces: jsonArray(row.workspaces_json), lastSeenAt: iso(row.last_seen_at),
     lastError: row.last_error, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at),
@@ -115,10 +116,15 @@ function mapRunner(row: RunnerRow): LocalRunner {
   };
 }
 
+/** 库里存的是字符串；未知值按最早的 codex 处理，保持旧数据兼容 */
+function runnerAdapterOf(value: unknown): LocalRunnerAdapter {
+  return value === "workbuddy" || value === "claude" ? value : "codex";
+}
+
 function mapTask(row: TaskRow): LocalRunnerTask {
   return {
     id: row.id, runnerId: row.runner_id, teamId: row.team_id, ownerId: row.owner_id,
-    createdBy: row.created_by, adapter: row.adapter === "workbuddy" ? "workbuddy" : "codex",
+    createdBy: row.created_by, adapter: runnerAdapterOf(row.adapter),
     prompt: row.prompt_text,
     workspace: row.workspace_path, executionMode: row.execution_mode,
     timeoutSeconds: Number(row.timeout_seconds), status: row.task_status,
@@ -187,12 +193,12 @@ export class MysqlLocalRunnerRepository implements LocalRunnerRepository {
       await connection.execute(
         `INSERT INTO integration_local_runners
          (id,team_id,owner_id,display_name,runner_status,token_hash,token_fingerprint,hostname,
-          platform_name,runner_version,codex_version,workbuddy_version,capabilities_json,workspaces_json,last_seen_at,
+          platform_name,runner_version,codex_version,workbuddy_version,claude_version,capabilities_json,workspaces_json,last_seen_at,
           last_error,created_at,updated_at,revoked_at)
-         VALUES (?,?,?,?,'active',?,?,?,?,?,?,?,?,?,NOW(3),'',?,?,NULL)`,
+         VALUES (?,?,?,?,'active',?,?,?,?,?,?,?,?,?,?,NOW(3),'',?,?,NULL)`,
         [runner.id, pairing.team_id, pairing.owner_id, runner.displayName, runner.tokenHash,
           runner.tokenFingerprint, runner.hostname, runner.platform, runner.runnerVersion,
-          runner.codexVersion, runner.workbuddyVersion,
+          runner.codexVersion, runner.workbuddyVersion, runner.claudeVersion,
           JSON.stringify(runner.capabilities), JSON.stringify(runner.workspaces),
           mysqlDate(runner.createdAt), mysqlDate(runner.updatedAt)]
       );
@@ -217,16 +223,16 @@ export class MysqlLocalRunnerRepository implements LocalRunnerRepository {
     return rows.map(mapRunner);
   }
 
-  async touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "workbuddyVersion" | "capabilities" | "workspaces" | "lastError">>) {
+  async touchRunner(id: string, input: Partial<Pick<LocalRunner, "hostname" | "platform" | "runnerVersion" | "codexVersion" | "workbuddyVersion" | "claudeVersion" | "capabilities" | "workspaces" | "lastError">>) {
     const [result] = await this.pool.execute<ResultSetHeader>(
       `UPDATE integration_local_runners SET hostname=COALESCE(?,hostname),platform_name=COALESCE(?,platform_name),
        runner_version=COALESCE(?,runner_version),codex_version=COALESCE(?,codex_version),
-       workbuddy_version=COALESCE(?,workbuddy_version),
+       workbuddy_version=COALESCE(?,workbuddy_version),claude_version=COALESCE(?,claude_version),
        capabilities_json=COALESCE(?,capabilities_json),workspaces_json=COALESCE(?,workspaces_json),
        last_error=COALESCE(?,last_error),last_seen_at=NOW(3),updated_at=NOW(3)
        WHERE id=? AND runner_status='active'`,
       [input.hostname ?? null, input.platform ?? null, input.runnerVersion ?? null,
-        input.codexVersion ?? null, input.workbuddyVersion ?? null,
+        input.codexVersion ?? null, input.workbuddyVersion ?? null, input.claudeVersion ?? null,
         input.capabilities ? JSON.stringify(input.capabilities) : null,
         input.workspaces ? JSON.stringify(input.workspaces) : null, input.lastError ?? null, id]
     );
@@ -291,7 +297,7 @@ export class MysqlLocalRunnerRepository implements LocalRunnerRepository {
     );
     return rows.map((row) => ({
       id: row.id,
-      adapter: (row.adapter === "workbuddy" ? "workbuddy" : "codex") as LocalRunnerAdapter,
+      adapter: runnerAdapterOf(row.adapter),
       status: row.task_status,
       errorMessage: row.error_message || "",
       promptHead: row.prompt_head || "",

@@ -7,7 +7,7 @@ export interface RunnerConfig {
   createdAt: string;
 }
 
-export type RunnerAdapter = "codex" | "workbuddy";
+export type RunnerAdapter = "codex" | "workbuddy" | "claude";
 
 export interface RunnerIdentity {
   hostname: string;
@@ -15,6 +15,7 @@ export interface RunnerIdentity {
   runnerVersion: string;
   codexVersion: string;
   workbuddyVersion: string;
+  claudeVersion: string;
   capabilities: string[];
   workspaces: string[];
 }

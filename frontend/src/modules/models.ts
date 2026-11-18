@@ -517,7 +517,7 @@ export interface TradeDocumentOcrProviderConfig {
  */
 export type ResearchEngineSource = "crm" | "ai" | "cli";
 export type EmailEngineSource = "template" | "ai" | "cli";
-type AiEngineAdapter = "workbuddy" | "codex";
+type AiEngineAdapter = "workbuddy" | "codex" | "claude";
 
 export interface TeamAiEngineSettings {
   teamId: string;
@@ -532,6 +532,10 @@ export interface TeamAiEngineSettings {
   codexModel?: string;
   /** 选用 Codex CLI 时的思考档位（minimal / low / medium / high；留空 = 跟随 Codex 默认） */
   codexEffort?: string;
+  /** 选用 Claude Code CLI 时的模型（别名 sonnet / opus / haiku 或完整 ID；出厂默认 sonnet；留空 = 跟随当前登录账号默认） */
+  claudeModel?: string;
+  /** 选用 Claude Code CLI 时的思考档位（low / medium / high / xhigh / max；留空 = 跟随 Claude 默认） */
+  claudeEffort?: string;
   cliWorkspace: string;
   cliTimeoutSeconds: number;
   runnerId: string;
@@ -555,6 +559,7 @@ export interface AiEngineRunnerSummary {
   workspaces: string[];
   workbuddyVersion: string;
   codexVersion: string;
+  claudeVersion?: string;
 }
 
 export interface AiEngineJobView {

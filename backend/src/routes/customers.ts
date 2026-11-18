@@ -122,7 +122,7 @@ async function resolveCustomerIntakeDir(workspace: string) {
  * 回填字段质量完全一致（9-10 项）。识别任务是纯文本抽取，绝不需要探索仓库。
  */
 const CUSTOMER_INTAKE_CLI_DISALLOWED_TOOLS = [
-  "Write", "Edit", "NotebookEdit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "TodoWrite"
+  "Write", "Edit", "NotebookEdit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Task", "TodoWrite"
 ];
 
 function customerIntakeCliProfileLine() {
@@ -135,7 +135,7 @@ function customerIntakeCliProfileLine() {
 
 function customerIntakePrompt(
   files: Array<{ name: string; readPath: string; converted?: boolean }>,
-  options: { speedProfile?: boolean; adapter?: "workbuddy" | "codex" } = {}
+  options: { speedProfile?: boolean; adapter?: "workbuddy" | "codex" | "claude" } = {}
 ) {
   const list = files
     .map((file) => `- ${file.readPath}（原始文件名：${file.name}${file.converted ? "，已由 CRM 从 Office 文档转为纯文本" : ""}）`)
@@ -388,7 +388,10 @@ function customerIntakeResult(input: {
   if (usable) {
     diagnosis = null;
   } else if (input.status === "failed") {
-    diagnosis = classifyEngineCliIssue(input.errorMessage || "本机 CLI 任务失败", /codex/iu.test(input.engine) ? "codex" : "workbuddy");
+    diagnosis = classifyEngineCliIssue(
+      input.errorMessage || "本机 CLI 任务失败",
+      /codex/iu.test(input.engine) ? "codex" : /claude/iu.test(input.engine) ? "claude" : "workbuddy"
+    );
   } else if (input.status === "cancelled") {
     diagnosis = {
       code: "cli_failed",

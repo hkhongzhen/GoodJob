@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readlinkSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
 import { promisify } from "node:util";
 import { executeCodexTask, resolveCodexBinary } from "./codex-adapter.js";
+import { executeClaudeTask, claudeProcessEnvironment, resolveClaudeBinary } from "./claude-adapter.js";
 import { executeWorkbuddyTask, resolveWorkbuddyBinary, workbuddyProcessEnvironment } from "./workbuddy-adapter.js";
 import { isBrowserCdpReady, isBrowserServiceReachable, tryStartBrowserService } from "./browser-service.js";
 import { GoodJobRunnerClient } from "./client.js";
@@ -11,7 +12,7 @@ import type { RunnerConfig, RunnerIdentity, TaskEventInput } from "./types.js";
 const execFileAsync = promisify(execFile);
 export const RUNNER_VERSION = "0.1.0";
 
-type CliKind = "codex" | "workbuddy";
+type CliKind = "codex" | "workbuddy" | "claude";
 
 /**
  * 探测失败原因。区分"本机没装"与"装了但起不来"很重要：
@@ -46,7 +47,8 @@ function describeProbeFailure(binary: string, error: unknown) {
 /** 最近一次探测的失败形态；成功即清空（能力缺失时上报给 CRM，让用户看到"为什么不可用"） */
 const probeFailures: Record<CliKind, { missing: boolean; reason: string }> = {
   codex: { missing: false, reason: "" },
-  workbuddy: { missing: false, reason: "" }
+  workbuddy: { missing: false, reason: "" },
+  claude: { missing: false, reason: "" }
 };
 
 async function probeCliVersion(binary: string, args: string[], timeout: number, kind: CliKind, env?: NodeJS.ProcessEnv) {
@@ -77,6 +79,12 @@ export async function detectWorkbuddyVersion(binary = resolveWorkbuddyBinary()) 
   return output.split("\n").map((line) => line.trim()).filter(Boolean).at(-1)?.slice(0, 80) || "";
 }
 
+/** 探测 Claude Code CLI 版本（形如 `2.1.322 (Claude Code)`）；未安装时返回空字符串，claude 能力自动关闭 */
+export async function detectClaudeVersion(binary = resolveClaudeBinary()) {
+  const output = await probeCliVersion(binary, ["--version"], 20_000, "claude", claudeProcessEnvironment());
+  return output.split("\n").map((line) => line.trim()).filter(Boolean).at(-1)?.slice(0, 80) || "";
+}
+
 /** CLI 探测结果缓存有效期；心跳每 10s 一次，没必要每次重跑两个 CLI 进程 */
 const IDENTITY_TTL_MS = 5 * 60_000;
 /**
@@ -103,6 +111,7 @@ interface CliDetectionCache {
   at: number;
   codex: CliProbeState;
   workbuddy: CliProbeState;
+  claude: CliProbeState;
   /** 进入"掉线快速重探"窗口的时刻；两端都正常时归零 */
   regressedAt: number;
 }
@@ -134,7 +143,8 @@ export function cliDetectionSnapshot() {
     at: cliDetection.at,
     regressedAt: cliDetection.regressedAt,
     codex: { ...cliDetection.codex },
-    workbuddy: { ...cliDetection.workbuddy }
+    workbuddy: { ...cliDetection.workbuddy },
+    claude: { ...cliDetection.claude }
   };
 }
 
@@ -156,10 +166,11 @@ function recoverable(state: CliProbeState, kind: CliKind) {
   return !probeFailures[kind].missing && Boolean(probeFailures[kind].reason);
 }
 
-function capabilitiesFor(codexVersion: string, workbuddyVersion: string) {
+function capabilitiesFor(codexVersion: string, workbuddyVersion: string, claudeVersion: string) {
   return [
     ...(codexVersion ? ["codex", "browser"] : []),
-    ...(workbuddyVersion ? ["workbuddy"] : [])
+    ...(workbuddyVersion ? ["workbuddy"] : []),
+    ...(claudeVersion ? ["claude"] : [])
   ];
 }
 
@@ -177,31 +188,41 @@ export async function detectRunnerClis(options: {
   force?: boolean;
   detectCodex?: () => Promise<string>;
   detectWorkbuddy?: () => Promise<string>;
+  detectClaude?: () => Promise<string>;
 } = {}) {
   const now = Date.now();
   if (!options.force && cliDetection) {
-    const recovering = recoverable(cliDetection.codex, "codex") || recoverable(cliDetection.workbuddy, "workbuddy");
+    const recovering = recoverable(cliDetection.codex, "codex")
+      || recoverable(cliDetection.workbuddy, "workbuddy")
+      || recoverable(cliDetection.claude, "claude");
     const degraded = recovering && now - cliDetection.regressedAt >= RECOVERY_WINDOW_MS;
     const ttl = options.ttlMs
       ?? (recovering ? (degraded ? DEGRADED_TTL_MS : options.recoveryTtlMs ?? RECOVERY_TTL_MS) : IDENTITY_TTL_MS);
     if (now - cliDetection.at < ttl) {
-      return { codexVersion: cliDetection.codex.version, workbuddyVersion: cliDetection.workbuddy.version };
+      return {
+        codexVersion: cliDetection.codex.version,
+        workbuddyVersion: cliDetection.workbuddy.version,
+        claudeVersion: cliDetection.claude.version
+      };
     }
   }
-  const [codexRaw, workbuddyRaw] = await Promise.all([
+  const [codexRaw, workbuddyRaw, claudeRaw] = await Promise.all([
     (options.detectCodex || (() => detectCodexVersion()))().catch(() => ""),
-    (options.detectWorkbuddy || (() => detectWorkbuddyVersion()))().catch(() => "")
+    (options.detectWorkbuddy || (() => detectWorkbuddyVersion()))().catch(() => ""),
+    (options.detectClaude || (() => detectClaudeVersion()))().catch(() => "")
   ]);
   const codex = carryOver(codexRaw, cliDetection?.codex || { version: "", failures: 0, everDetected: false });
   const workbuddy = carryOver(workbuddyRaw, cliDetection?.workbuddy || { version: "", failures: 0, everDetected: false });
-  const regressed = recoverable(codex, "codex") || recoverable(workbuddy, "workbuddy");
+  const claude = carryOver(claudeRaw, cliDetection?.claude || { version: "", failures: 0, everDetected: false });
+  const regressed = recoverable(codex, "codex") || recoverable(workbuddy, "workbuddy") || recoverable(claude, "claude");
   cliDetection = {
     at: now,
     codex,
     workbuddy,
+    claude,
     regressedAt: regressed ? (cliDetection?.regressedAt || now) : 0
   };
-  return { codexVersion: codex.version, workbuddyVersion: workbuddy.version };
+  return { codexVersion: codex.version, workbuddyVersion: workbuddy.version, claudeVersion: claude.version };
 }
 
 /**
@@ -210,7 +231,7 @@ export async function detectRunnerClis(options: {
  */
 export function runnerCliIssue() {
   const parts: string[] = [];
-  for (const [kind, label] of [["codex", "Codex CLI"], ["workbuddy", "WorkBuddy CLI"]] as const) {
+  for (const [kind, label] of [["codex", "Codex CLI"], ["workbuddy", "WorkBuddy CLI"], ["claude", "Claude Code CLI"]] as const) {
     const state = cliDetection?.[kind];
     const failure = probeFailures[kind];
     if (state && !state.version && failure.reason && !failure.missing) parts.push(`${label} 暂不可用：${failure.reason}`);
@@ -219,14 +240,15 @@ export function runnerCliIssue() {
 }
 
 export async function runnerIdentity(workspaces: string[]): Promise<RunnerIdentity> {
-  const { codexVersion, workbuddyVersion } = await detectRunnerClis();
+  const { codexVersion, workbuddyVersion, claudeVersion } = await detectRunnerClis();
   const identity: RunnerIdentity = {
     hostname: hostname(),
     platform: `${platform()} ${release()}`,
     runnerVersion: RUNNER_VERSION,
     codexVersion,
     workbuddyVersion,
-    capabilities: capabilitiesFor(codexVersion, workbuddyVersion),
+    claudeVersion,
+    capabilities: capabilitiesFor(codexVersion, workbuddyVersion, claudeVersion),
     workspaces
   };
   identitySnapshot = { key: workspaces.join("|"), identity, at: Date.now() };
@@ -304,20 +326,19 @@ export async function runOneClaim(config: RunnerConfig, outerSignal?: AbortSigna
   heartbeat.unref();
   const publisher = eventPublisher(client, claim.task.id, claim.leaseToken);
   try {
-    const isWorkbuddy = claim.task.adapter === "workbuddy";
-    await client.event(claim.task.id, claim.leaseToken, { eventType: "status", message: isWorkbuddy ? "正在启动 WorkBuddy CLI" : "正在启动 Codex CLI" });
-    const result = isWorkbuddy
-      ? await executeWorkbuddyTask(claim.task, {
-        allowedWorkspaces: config.workspaces,
-        signal: controller.signal,
-        onEvent: (event) => publisher.push(event)
-      })
-      : await executeCodexTask(claim.task, {
-        allowedWorkspaces: config.workspaces,
-        browserMcpUrl,
-        signal: controller.signal,
-        onEvent: (event) => publisher.push(event)
-      });
+    const adapter = claim.task.adapter;
+    const startLabel = adapter === "workbuddy" ? "WorkBuddy CLI" : adapter === "claude" ? "Claude Code CLI" : "Codex CLI";
+    await client.event(claim.task.id, claim.leaseToken, { eventType: "status", message: `正在启动 ${startLabel}` });
+    const streamOptions = {
+      allowedWorkspaces: config.workspaces,
+      signal: controller.signal,
+      onEvent: (event: TaskEventInput) => publisher.push(event)
+    };
+    const result = adapter === "workbuddy"
+      ? await executeWorkbuddyTask(claim.task, streamOptions)
+      : adapter === "claude"
+        ? await executeClaudeTask(claim.task, streamOptions)
+        : await executeCodexTask(claim.task, { ...streamOptions, browserMcpUrl });
     await publisher.flush();
     await client.complete(claim.task.id, claim.leaseToken, result);
   } catch (error) {

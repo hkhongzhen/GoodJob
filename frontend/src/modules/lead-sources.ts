@@ -588,6 +588,56 @@ async function pollCliAcquireJob(
   return { stats: null, failReason: "timeout" };
 }
 
+// ---------------------------------------------------------------------------
+// CLI 获客弹窗草稿：记住上次填的内容。
+//
+// 以前每次打开弹窗都是空的，做同一类客户要重复输入目标、关键词、国家……
+// 按账号存在浏览器 localStorage（只存这七个输入框，不含任何密钥）：边输入边存，
+// 所以「取消」或误关弹窗也不丢；点开始后同样保留，方便微调后再跑一次。
+// 存取全部 try/catch：隐私模式或存储被禁用时静默退化为「不记忆」，不影响获客本身。
+// ---------------------------------------------------------------------------
+const CLI_ACQUIRE_DRAFT_FIELDS = [
+  ["goal", "#cliAcquireGoalInput"],
+  ["productKeywords", "#cliAcquireKeywordsInput"],
+  ["countries", "#cliAcquireCountriesInput"],
+  ["industry", "#cliAcquireIndustryInput"],
+  ["customerType", "#cliAcquireCustomerTypeInput"],
+  ["excludeKeywords", "#cliAcquireExcludeInput"],
+  ["limit", "#cliAcquireLimitInput"]
+] as const;
+
+function cliAcquireDraftKey() {
+  return `goodjob.cliAcquireDraft.${state.user?.id || "anonymous"}`;
+}
+
+function readCliAcquireDraft(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(cliAcquireDraftKey());
+    const parsed = raw ? JSON.parse(raw) as unknown : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const draft: Record<string, string> = {};
+    for (const [key] of CLI_ACQUIRE_DRAFT_FIELDS) {
+      const value = (parsed as Record<string, unknown>)[key];
+      if (typeof value === "string") draft[key] = value.slice(0, 2000);
+    }
+    return draft;
+  } catch {
+    return {};
+  }
+}
+
+function writeCliAcquireDraft(draft: Record<string, string>) {
+  try { window.localStorage.setItem(cliAcquireDraftKey(), JSON.stringify(draft)); } catch { /* 隐私模式等场景静默忽略 */ }
+}
+
+function saveCliAcquireDraftFromForm() {
+  const draft: Record<string, string> = {};
+  for (const [key, selector] of CLI_ACQUIRE_DRAFT_FIELDS) {
+    draft[key] = qs<HTMLInputElement | HTMLTextAreaElement>(selector)?.value || "";
+  }
+  writeCliAcquireDraft(draft);
+}
+
 export function openCliAcquireModal() {
   const body = `<p class="ob-note" style="margin:0 0 12px">只收<strong>决策人或采购人</strong>的具名邮箱（owner / founder / CEO / 总经理 / 采购 / sourcing / buyer）；info@、sales@ 这类公共信箱不算。找不到对应联系人的公司<strong>不会入池</strong>，宁缺毋滥。</p>
   <div class="form-grid">
@@ -600,7 +650,22 @@ export function openCliAcquireModal() {
     <div class="lead-field"><label>目标数量（1-30）</label><input id="cliAcquireLimitInput" type="number" min="1" max="30" value="8"></div>
   </div>
   <p class="ob-note" style="margin-top:10px">点击开始后弹窗立即关闭，任务会挂到搜客任务队列实时显示进度与执行细节（每核实一家实时入池）；期间可自由操作其它界面，刷新页面后任务卡也会自动恢复跟踪，结果不会丢，候选清单自动按查重规则入池。</p>`;
-  openModal("CLI 获客 · 本机智能体搜寻", body, `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="cliAcquireSubmitButton" type="button">开始获客并同步候选清单</button>`, { closeOnBackdrop: false });
+  openModal("CLI 获客 · 本机智能体搜寻", body, `<button class="btn" id="cliAcquireClearButton" type="button" title="清空所有输入框和已保存的上次内容">清空</button><button class="btn" data-modal-close>取消</button><button class="btn primary" id="cliAcquireSubmitButton" type="button">开始获客并同步候选清单</button>`, { closeOnBackdrop: false });
+  // 回填上次填的内容；没存过的字段保持占位符 / 默认值（目标数量默认 8）
+  const draft = readCliAcquireDraft();
+  for (const [key, selector] of CLI_ACQUIRE_DRAFT_FIELDS) {
+    const input = qs<HTMLInputElement | HTMLTextAreaElement>(selector);
+    if (input && draft[key]) input.value = draft[key];
+    input?.addEventListener("input", saveCliAcquireDraftFromForm);
+  }
+  qs<HTMLButtonElement>("#cliAcquireClearButton")?.addEventListener("click", () => {
+    for (const [key, selector] of CLI_ACQUIRE_DRAFT_FIELDS) {
+      const input = qs<HTMLInputElement | HTMLTextAreaElement>(selector);
+      if (input) input.value = key === "limit" ? "8" : "";
+    }
+    writeCliAcquireDraft({});
+    qs<HTMLTextAreaElement>("#cliAcquireGoalInput")?.focus();
+  });
   qs<HTMLButtonElement>("#cliAcquireSubmitButton")?.addEventListener("click", () => void runCliAcquire());
 }
 
@@ -893,6 +958,7 @@ async function runCliAcquire() {
     toast("请至少填写获客目标、产品关键词或行业之一", "error");
     return;
   }
+  saveCliAcquireDraftFromForm();
   // 点开始立即关弹窗：任务挂到搜客任务队列（流式框）实时刷进度与执行细节，
   // 轮询在后台独立进行——用户可继续操作其它界面，回到搜客页即见任务卡与候选。
   closeModal();

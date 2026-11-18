@@ -274,7 +274,10 @@ function stripCliProfileMarker(prompt: string) {
   return [remainder, rest].filter(Boolean).join("\n");
 }
 
-export function parseWorkbuddyCliProfile(prompt: string): { prompt: string; profile: WorkbuddyCliProfile } {
+export function parseWorkbuddyCliProfile(
+  prompt: string,
+  isModelAllowed: (model: string) => boolean = (model) => MODEL_IDS.has(model)
+): { prompt: string; profile: WorkbuddyCliProfile } {
   const profile: WorkbuddyCliProfile = { effort: "", model: "", maxTurns: 0, disallowedTools: [] };
   if (!prompt.startsWith(CLI_PROFILE_PREFIX)) return { prompt, profile };
   const lineEnd = prompt.indexOf("\n");
@@ -294,7 +297,7 @@ export function parseWorkbuddyCliProfile(prompt: string): { prompt: string; prof
   const effort = String(payload.effort || "").trim().toLowerCase();
   if (EFFORT_LEVELS.has(effort)) profile.effort = effort;
   const model = String(payload.model || "").trim();
-  if (MODEL_IDS.has(model)) profile.model = model;
+  if (isModelAllowed(model)) profile.model = model;
   const maxTurns = Number(payload.maxTurns);
   if (Number.isInteger(maxTurns) && maxTurns >= 1 && maxTurns <= 40) profile.maxTurns = maxTurns;
   if (Array.isArray(payload.disallowedTools)) {
@@ -326,23 +329,64 @@ export function workbuddyProfileLabel(profile: WorkbuddyCliProfile): string {
 
 export async function executeWorkbuddyTask(task: ClaimedTask, options: WorkBuddyExecutionOptions): Promise<WorkBuddyExecutionResult> {
   if (task.adapter !== "workbuddy") throw new Error("Runner 只允许执行 WorkBuddy 适配器任务");
+  return runStreamJsonCliTask(task, options, {
+    label: "WorkBuddy CLI",
+    binary: options.workbuddyBinary || resolveWorkbuddyBinary(),
+    parseProfile: (prompt) => parseWorkbuddyCliProfile(prompt),
+    extraArgs: [],
+    environment: (workspace) => {
+      const skillDirs = workbuddySkillDirs(workspace);
+      const childEnv = workbuddyProcessEnvironment();
+      if (skillDirs) childEnv.CODEBUDDY_SESSION_SKILL_DIRS = skillDirs;
+      return childEnv;
+    }
+  });
+}
+
+/** 一个 `--print --output-format stream-json` 系 CLI（WorkBuddy / Claude Code）的执行规格 */
+export interface StreamJsonCliSpec {
+  /** 展示给用户的名字，例如「WorkBuddy CLI」「Claude Code CLI」 */
+  label: string;
+  binary: string;
+  parseProfile(prompt: string): { prompt: string; profile: WorkbuddyCliProfile };
+  /** 固定参数里、思考档位 / 模型等可选参数之前追加的参数（例如 Claude 需要 --verbose） */
+  extraArgs: string[];
+  /** 子进程环境（必须已剔除宿主注入的会话级变量） */
+  environment(workspace: string): NodeJS.ProcessEnv;
+  /**
+   * 权限相关参数。不提供时用 WorkBuddy 的约定：只读 `--permission-mode plan`，可写 `acceptEdits`。
+   * 提供时由规格自己决定（含 --disallowedTools 的合并），核心不再追加档位里的 --disallowedTools。
+   */
+  permissionArgs?(mode: "read_only" | "workspace_write", profile: WorkbuddyCliProfile): string[];
+}
+
+export async function runStreamJsonCliTask(
+  task: ClaimedTask,
+  options: WorkBuddyExecutionOptions,
+  spec: StreamJsonCliSpec
+): Promise<WorkBuddyExecutionResult> {
   const workspace = await realpath(task.workspace);
   const allowed = await Promise.all(options.allowedWorkspaces.map((item) => realpath(item)));
   if (!allowed.includes(workspace)) throw new Error("任务工作目录不在本机 Runner 授权范围内");
 
-  const binary = options.workbuddyBinary || resolveWorkbuddyBinary();
-  const requested = parseWorkbuddyCliProfile(task.prompt);
-  const profileArgs = workbuddyProfileArgs(requested.profile);
+  const binary = spec.binary;
+  const requested = spec.parseProfile(task.prompt);
+  // 规格自己管权限时，档位里的 disallowedTools 已被它合并进权限参数，这里不能再重复传一遍
+  const profileArgs = workbuddyProfileArgs(spec.permissionArgs
+    ? { ...requested.profile, disallowedTools: [] }
+    : requested.profile);
+  const permissionArgs = spec.permissionArgs
+    ? spec.permissionArgs(task.executionMode, requested.profile)
+    : ["--permission-mode", task.executionMode === "workspace_write" ? "acceptEdits" : "plan"];
   const args = [
     "--print",
     "--output-format", "stream-json",
+    ...spec.extraArgs,
     "--no-session-persistence",
-    "--permission-mode", task.executionMode === "workspace_write" ? "acceptEdits" : "plan",
+    ...permissionArgs,
     ...profileArgs
   ];
-  const skillDirs = workbuddySkillDirs(workspace);
-  const childEnv = workbuddyProcessEnvironment();
-  if (skillDirs) childEnv.CODEBUDDY_SESSION_SKILL_DIRS = skillDirs;
+  const childEnv = spec.environment(workspace);
   const child = spawn(binary, args, {
     cwd: workspace,
     shell: false,
@@ -393,8 +437,8 @@ export async function executeWorkbuddyTask(task: ClaimedTask, options: WorkBuddy
       send({
         eventType: "status",
         message: selfReportedModel
-          ? `WorkBuddy CLI 会话已建立（实际使用模型：${selfReportedModel}）`
-          : "WorkBuddy CLI 会话已建立",
+          ? `${spec.label} 会话已建立（实际使用模型：${selfReportedModel}）`
+          : `${spec.label} 会话已建立`,
         payload: {
           stage: "session",
           status: "completed",
@@ -416,7 +460,7 @@ export async function executeWorkbuddyTask(task: ClaimedTask, options: WorkBuddy
         // CLI 的错误原因可能在三个位置：error（字符串）、result（文本）、errors（数组，如未登录时
         // 只有 errors: ["Authentication required. Please use /login ..."]）。逐个兜底，避免落到空文案。
         const errorList = Array.isArray(event.errors) ? event.errors.filter((item) => typeof item === "string" && item.trim()) : [];
-        failureReason = clipped(event.error || event.result || errorList[0] || "WorkBuddy CLI 返回失败", 2000);
+        failureReason = clipped(event.error || event.result || errorList[0] || `${spec.label} 返回失败`, 2000);
         send({ eventType: "error", message: failureReason, payload: { stage: "system", status: "failed" } });
       }
       return;
@@ -433,7 +477,7 @@ export async function executeWorkbuddyTask(task: ClaimedTask, options: WorkBuddy
     }
     if (type === "error") {
       resultFailed = true;
-      failureReason = clipped(event.error || event.message || "WorkBuddy CLI 返回错误", 2000);
+      failureReason = clipped(event.error || event.message || `${spec.label} 返回错误`, 2000);
       send({ eventType: "error", message: failureReason, payload: { stage: "system", status: "failed" } });
       return;
     }
@@ -479,8 +523,8 @@ export async function executeWorkbuddyTask(task: ClaimedTask, options: WorkBuddy
   const succeeded = !timedOut && !resultFailed && (exit.code === 0 || sawResult);
   const resultText = redact(finalText || (succeeded ? fallbackOutput.trim() : ""));
   const errorMessage = redact(timedOut
-    ? `WorkBuddy CLI 执行超过 ${task.timeoutSeconds} 秒，已停止`
-    : exit.error?.message || (succeeded ? "" : failureReason || stderr.trim() || `WorkBuddy CLI 退出码：${exit.code ?? exit.signal ?? "unknown"}`));
+    ? `${spec.label} 执行超过 ${task.timeoutSeconds} 秒，已停止`
+    : exit.error?.message || (succeeded ? "" : failureReason || stderr.trim() || `${spec.label} 退出码：${exit.code ?? exit.signal ?? "unknown"}`));
   return {
     status: cancelled ? "cancelled" : succeeded ? "succeeded" : "failed",
     resultText,

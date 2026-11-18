@@ -23,13 +23,14 @@ const labels: Record<string, string> = {
 /** 适配器元数据：名称、短标签、CLI 字段与安装提示 */
 const ADAPTERS: Array<{ id: LocalRunnerAdapter; name: string; badge: string; hint: string }> = [
   { id: "workbuddy", name: "WorkBuddy CLI", badge: "WORKBUDDY", hint: "WorkBuddy 桌面端自带的 codebuddy CLI" },
-  { id: "codex", name: "Codex CLI", badge: "CODEX", hint: "独立安装的 Codex CLI（可带独立浏览器）" }
+  { id: "codex", name: "Codex CLI", badge: "CODEX", hint: "独立安装的 Codex CLI（可带独立浏览器）" },
+  { id: "claude", name: "Claude Code CLI", badge: "CLAUDE", hint: "本机已登录的 Claude Code（走你自己的 Claude 订阅，不需要 API Key）" }
 ];
 
 const adapterMeta = (adapter: string) => ADAPTERS.find((item) => item.id === adapter) || ADAPTERS[1];
 const adapterLabel = (adapter: string) => adapterMeta(adapter).name;
 const adapterVersion = (runner: LocalRunner, adapter: LocalRunnerAdapter) =>
-  adapter === "workbuddy" ? runner.workbuddyVersion : runner.codexVersion;
+  adapter === "workbuddy" ? runner.workbuddyVersion : adapter === "claude" ? runner.claudeVersion || "" : runner.codexVersion;
 
 /** 设备卡片上展示的 CLI 摘要，例如 “WorkBuddy CLI 2.156.0 · Codex CLI 0.9.1” */
 function runnerCliSummary(runner: LocalRunner) {
@@ -38,7 +39,7 @@ function runnerCliSummary(runner: LocalRunner) {
       const version = adapterVersion(runner, item.id);
       return version ? `${item.name} ${version}` : item.name;
     });
-  return parts.length ? parts.join(" · ") : "未检测到 Codex / WorkBuddy CLI";
+  return parts.length ? parts.join(" · ") : "未检测到 Codex / WorkBuddy / Claude Code CLI";
 }
 
 function escapeHtml(value: unknown) {
@@ -108,7 +109,7 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
   const selectedTask = () => tasks.find((item) => item.id === selectedTaskId) || tasks[0];
   /**
    * 解析实际要用的适配器：优先用户选择；不可用时回退到该设备已具备的能力。
-   * WorkBuddy 优先于 Codex —— 本机同时具备两者时默认走 WorkBuddy CLI。
+   * 优先级 WorkBuddy > Codex > Claude Code —— 本机同时具备多个时默认走靠前的（与既有行为一致，Claude 需手动选）。
    */
   const resolvedAdapter = (runner: LocalRunner | undefined): LocalRunnerAdapter => {
     const available = ADAPTERS.map((item) => item.id).filter((id) => runner?.capabilities.includes(id));
@@ -193,7 +194,7 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
     const list = one<HTMLElement>("#localRunnerTaskList");
     if (!list) return;
     if (!tasks.length) {
-      list.innerHTML = `<div class="local-runner-empty compact"><b>暂无执行记录</b><span>提交的 Codex / WorkBuddy 任务会按时间排列。</span></div>`;
+      list.innerHTML = `<div class="local-runner-empty compact"><b>暂无执行记录</b><span>提交的 Codex / WorkBuddy / Claude Code 任务会按时间排列。</span></div>`;
       return;
     }
     list.innerHTML = tasks.map((task) => `<button type="button" class="local-runner-task ${task.id === selectedTask()?.id ? "selected" : ""}" data-local-runner-task="${escapeHtml(task.id)}">
@@ -304,7 +305,7 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
         </ul>
         <small>登录和装包必须在系统 Terminal 里做，网页无法代劳——这是安全边界。</small>
       </div>
-      <p class="hint">配对码在页面显示的时间前有效且只能使用一次。Runner 由本机主动连接 CRM，不需要开放本机端口，并会自动探测 Codex CLI 与 WorkBuddy CLI。</p>
+      <p class="hint">配对码在页面显示的时间前有效且只能使用一次。Runner 由本机主动连接 CRM，不需要开放本机端口，并会自动探测 Codex CLI、WorkBuddy CLI 与 Claude Code CLI。</p>
     </div>`, `<button class="btn" data-modal-close type="button">取消</button><button class="btn primary" id="localRunnerPairCreate" type="button">生成配对码</button>`);
     document.querySelector<HTMLButtonElement>("#localRunnerPairCreate")?.addEventListener("click", async (event) => {
       const button = event.currentTarget as HTMLButtonElement;
@@ -387,7 +388,7 @@ export function mountLocalRunnerCenter(root: HTMLElement, dependencies: Dependen
     const adapterButton = target.closest<HTMLButtonElement>("[data-runner-adapter]");
     if (adapterButton) {
       const next = adapterButton.dataset.runnerAdapter;
-      if (next === "workbuddy" || next === "codex") adapter = next;
+      if (next === "workbuddy" || next === "codex" || next === "claude") adapter = next;
       renderComposer();
       return;
     }

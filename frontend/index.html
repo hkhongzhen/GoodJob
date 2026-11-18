@@ -26924,7 +26924,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 </button>
                 <button class="tool-card integration-launch-card" type="button" data-integration-launch-tab="local-runner" style="--tc:#7561d8">
                   <span class="tool-card-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 3 3-3 3M13 16h4"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg></span>
-                  <span class="tool-card-body"><span class="tool-card-title">本地 Runner</span><span class="tool-card-desc">调用本机 Codex / WorkBuddy CLI，查看任务过程与结果</span></span>
+                  <span class="tool-card-body"><span class="tool-card-title">本地 Runner</span><span class="tool-card-desc">调用本机 Codex / WorkBuddy / Claude Code CLI，查看任务过程与结果</span></span>
                   <span class="tool-card-badge">CLI</span><span class="tool-card-go" aria-hidden="true">&#8594;</span>
                 </button>
                 <button class="tool-card integration-launch-card" type="button" data-integration-launch-tab="mail-calendar" style="--tc:#3578b8">
@@ -27079,7 +27079,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
 
             <section class="integration-tab-panel" data-integration-panel="local-runner" hidden>
               <div class="local-runner-head">
-                <div><h2>GoodJob Runner</h2><p>让网页安全调用本机 Codex CLI 或 WorkBuddy CLI，任务过程与结果自动回到 CRM。</p></div>
+                <div><h2>GoodJob Runner</h2><p>让网页安全调用本机 Codex CLI、WorkBuddy CLI 或 Claude Code CLI，任务过程与结果自动回到 CRM。</p></div>
                 <button class="btn primary" id="localRunnerPairButton" type="button" data-permission="integration.connect">配对设备</button>
               </div>
               <div class="local-runner-summary" aria-label="Runner 状态概览">
@@ -33586,18 +33586,18 @@ body.platform-mode .workspace-tabs { display:none !important; }
           </section>
 
           <section class="panel section" id="aiEngineSettingsSection">
-            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>AI 执行来源</h2><p class="section-subtitle">背调与开发信可以由谁来做：CRM 本地分析、AI API，或本机已配对的 WorkBuddy / Codex CLI。这里设的是默认值，操作时还可以临时切换。</p></div></div><div class="head-actions"><span class="badge amber" id="aiEngineCliStatus">未就绪</span><button class="btn primary" id="aiEngineSaveButton">保存 AI 来源</button></div></div>
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>AI 执行来源</h2><p class="section-subtitle">背调与开发信可以由谁来做：CRM 本地分析、AI API，或本机已配对的 WorkBuddy / Codex / Claude Code CLI。这里设的是默认值，操作时还可以临时切换。</p></div></div><div class="head-actions"><span class="badge amber" id="aiEngineCliStatus">未就绪</span><button class="btn primary" id="aiEngineSaveButton">保存 AI 来源</button></div></div>
             <div class="company-profile-form" style="margin-top:14px;">
               <label><span>默认背调来源</span><select id="aiEngineResearchSource"><option value="crm">CRM 本地分析</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
               <label><span>默认开发信来源</span><select id="aiEngineEmailSource"><option value="template">规则模板</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
-              <label><span>CLI 适配器</span><select id="aiEngineCliAdapter"><option value="workbuddy">WorkBuddy CLI</option><option value="codex">Codex CLI</option></select></label>
+              <label><span>CLI 适配器</span><select id="aiEngineCliAdapter"><option value="workbuddy">WorkBuddy CLI</option><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select></label>
               <label><span>CLI 模型</span><select id="aiEngineCliModel" title="系统默认 deepseek-v4.1-flash；选「跟随 CLI 默认」则改由 CLI 当前登录账号决定（会随切账号变化）"></select></label>
               <label><span>思考档位</span><select id="aiEngineCliEffort" title="留空 = 跟随 CLI 默认"></select></label>
               <label><span>CLI 超时（分钟）</span><input id="aiEngineCliTimeout" type="number" min="1" max="1440" step="1" value="15"></label>
               <label class="wide"><span>CLI 工作目录（留空自动用 Runner 的首个授权目录）</span><input id="aiEngineCliWorkspace" placeholder="/Users/you/Desktop/GoodJob_private"></label>
               <label class="wide"><span>指定 Runner（留空自动选择在线机器）</span><select id="aiEngineRunner"><option value="">自动选择在线的 Runner</option></select></label>
             </div>
-            <p class="system-setting-help"><b>WorkBuddy CLI 与 Codex CLI 二选一。</b>团队选定一个首选 CLI；执行机上只装了另一个时会自动改用它，两个都装了就按这里的选择执行。两个 CLI 的模型分开保存：切换「CLI 适配器」后，模型与思考档位显示的是该 CLI 自己的那一份。<br><b>模型决定 CLI 有多聪明。</b>WorkBuddy CLI 没配过模型时默认使用 fast-model（最快档，但思考最少，做背调、写开发信这类需要判断力的任务会显得「变傻」），建议这类任务选 deep-model 或具体强模型；Codex CLI 出厂默认 gpt-5.6-sol，选「跟随本机 Codex 配置」则用 ~/.codex/config.toml 里的模型。资料识别等纯抽取任务保持默认即可。<br>CLI 通道是「读为主」的执行：任务以只读模式在本机运行，超时上限 24 小时（1440 分钟）。机器没配对或离线时，把来源切回 AI API 或 CRM 本地分析即可继续工作，不影响已有数据。</p>
+            <p class="system-setting-help"><b>WorkBuddy、Codex、Claude Code 三选一。</b>团队选定一个首选 CLI；执行机上首选的不可用时会按固定顺序自动改用另一个（WorkBuddy 与 Codex 互备，Claude Code 排最后；首选 Claude 时先试 WorkBuddy 再试 Codex）。各 CLI 的模型分开保存：切换「CLI 适配器」后，模型与思考档位显示的是该 CLI 自己的那一份。<br><b>模型决定 CLI 有多聪明。</b>WorkBuddy CLI 没配过模型时默认使用 fast-model（最快档，但思考最少，做背调、写开发信这类需要判断力的任务会显得「变傻」），建议这类任务选 deep-model 或具体强模型；Codex CLI 出厂默认 gpt-5.6-sol，选「跟随本机 Codex 配置」则用 ~/.codex/config.toml 里的模型；Claude Code CLI 走你自己的 Claude 订阅（不需要 API Key），出厂默认 sonnet，复杂背调可选 opus，需先在终端执行 claude 并 /login。资料识别等纯抽取任务保持默认即可。<br>CLI 通道是「读为主」的执行：任务以只读模式在本机运行，超时上限 24 小时（1440 分钟）。机器没配对或离线时，把来源切回 AI API 或 CRM 本地分析即可继续工作，不影响已有数据。</p>
           </section>
 
           <!-- 系统更新区域 -->

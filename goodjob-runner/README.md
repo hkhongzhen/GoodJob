@@ -13,6 +13,16 @@ goodjob-runner start
 
 本机配置保存在 `~/.goodjob/runner.json`，文件权限为 `0600`。可用 `GOODJOB_RUNNER_CONFIG` 指定其他位置，用 `GOODJOB_CODEX_BIN` 指定 Codex CLI 路径。
 
+Runner 支持三种本机 CLI：**Codex**、**WorkBuddy（codebuddy）** 和 **Claude Code**，装了哪个就自动检测哪个。
+
+**Claude Code CLI**（走你自己的 Claude 订阅登录，不需要 API Key）：
+
+- 先在终端运行 `claude`，进入后输入 `/login` 完成登录；`claude --version` 能正常输出即可被检测到。
+- 可执行文件按 `GOODJOB_CLAUDE_BIN` > PATH 里的 `claude` > `~/.local/bin/claude` 等常见位置的顺序查找。
+- 任务以 `--print --output-format stream-json --verbose --safe-mode` 运行：`--safe-mode` 会关掉本机的 CLAUDE.md、用户技能、hooks、MCP 与插件，避免个人配置在 CRM 任务里被执行；只读任务用 `--permission-mode plan`。
+- 子进程环境只剔除「宿主 Claude Code 会话」变量（`CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT` 等），**保留**登录凭据与代理（Claude 出网常需要代理）。
+- 模型与思考档位在 CRM「系统设置 · AI 执行来源」里选 Claude Code CLI 后单独配置（sonnet / opus / haiku，或完整模型 ID）。
+
 在 macOS 上，Runner 会优先使用 ChatGPT 桌面版内置的 Codex CLI，因为它与 `codex-code-mode-host` 成套发布，可正常执行终端工具。运行 `goodjob-runner doctor` 可以确认实际执行文件和工具宿主路径。
 
 Runner 启动时会同时启动 GoodJob 独立受控浏览器：

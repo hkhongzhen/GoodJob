@@ -20,6 +20,7 @@ import { openCustomerModal } from "./customer-intake";
 let aiEngineSettings: TeamAiEngineSettings = {
   teamId: "", researchSource: "ai", emailSource: "ai", cliAdapter: "workbuddy",
   cliModel: "deepseek-v4.1-flash", cliEffort: "", codexModel: "gpt-5.6-sol", codexEffort: "",
+  claudeModel: "sonnet", claudeEffort: "",
   cliWorkspace: "", cliTimeoutSeconds: 900, runnerId: "", updatedBy: "", updatedAt: ""
 };
 let aiEngineRunners: AiEngineRunnerSummary[] = [];
@@ -29,6 +30,9 @@ let aiEngineCliReady = false;
 /** Codex CLI 的模型 / 档位清单（与 WorkBuddy 的命名互不相通，后端单独给） */
 let aiEngineCodexModels: AiEngineCliModelOption[] = [];
 let aiEngineCodexEfforts: string[] = [];
+/** Claude Code CLI 的模型 / 档位清单（别名或完整 ID，后端单独给） */
+let aiEngineClaudeModels: AiEngineCliModelOption[] = [];
+let aiEngineClaudeEfforts: string[] = [];
 /** 每个 CLI 当前是否有在线 Runner 可用 */
 let aiEngineAdapterAvailability: Record<string, boolean> = {};
 /**
@@ -45,7 +49,7 @@ let aiEngineSettingsLoaded = false;
 const aiEngineSourceMeta: Record<string, { label: string; hint: string }> = {
   crm: { label: "CRM 本地分析", hint: "只用 CRM 已有资料与公开来源，不调用模型，永远可用" },
   ai: { label: "AI API", hint: "调用「AI 配置」里已启用的模型，按额度计费" },
-  cli: { label: "本机 CLI", hint: "交给已配对的 WorkBuddy / Codex CLI 联网调研，需本机 Runner 在线" },
+  cli: { label: "本机 CLI", hint: "交给已配对的 WorkBuddy / Codex / Claude Code CLI 联网调研，需本机 Runner 在线" },
   template: { label: "规则模板", hint: "按开发阶段套用内置模板，不调用模型" }
 };
 
@@ -104,6 +108,8 @@ export async function loadAiEngineSettings() {
     cliEfforts?: string[];
     codexModels?: AiEngineCliModelOption[];
     codexEfforts?: string[];
+    claudeModels?: AiEngineCliModelOption[];
+    claudeEfforts?: string[];
     adapterAvailability?: Record<string, boolean>;
     cliReady: boolean;
   }>("/api/ai-engine/settings");
@@ -114,6 +120,8 @@ export async function loadAiEngineSettings() {
   aiEngineCliReady = Boolean(result.cliReady);
   aiEngineCodexModels = result.codexModels || [];
   aiEngineCodexEfforts = result.codexEfforts || [];
+  aiEngineClaudeModels = result.claudeModels || [];
+  aiEngineClaudeEfforts = result.claudeEfforts || [];
   aiEngineAdapterAvailability = result.adapterAvailability || {};
   aiEngineSettingsLoaded = true;
   return result;
@@ -136,7 +144,8 @@ function renderAiEngineSettings() {
   if (adapter) adapter.value = aiEngineSettings.cliAdapter;
   aiEngineCliDrafts = {
     workbuddy: { model: aiEngineSettings.cliModel || "", effort: aiEngineSettings.cliEffort || "" },
-    codex: { model: aiEngineSettings.codexModel ?? "gpt-5.6-sol", effort: aiEngineSettings.codexEffort ?? "" }
+    codex: { model: aiEngineSettings.codexModel ?? "gpt-5.6-sol", effort: aiEngineSettings.codexEffort ?? "" },
+    claude: { model: aiEngineSettings.claudeModel ?? "sonnet", effort: aiEngineSettings.claudeEffort ?? "" }
   };
   renderAiEngineCliProfileControls(aiEngineSettings.cliAdapter);
   if (adapter) {
@@ -169,7 +178,14 @@ function renderAiEngineSettings() {
 }
 
 function aiEngineAdapterName(adapter: string) {
-  return adapter === "codex" ? "Codex CLI" : "WorkBuddy CLI";
+  return adapter === "codex" ? "Codex CLI" : adapter === "claude" ? "Claude Code CLI" : "WorkBuddy CLI";
+}
+
+/** 首选 CLI 不可用时的回退顺序（与后端 aiEngineAdapterFallbacks 一致：WorkBuddy ↔ Codex 互备，Claude 排最后） */
+function aiEngineAdapterFallbackOrder(adapter: string): string[] {
+  if (adapter === "codex") return ["workbuddy", "claude"];
+  if (adapter === "claude") return ["workbuddy", "codex"];
+  return ["codex", "claude"];
 }
 
 /** 把模型 / 档位下拉框的当前值记进指定 CLI 的草稿 */
@@ -184,15 +200,22 @@ function stashAiEngineCliDraft(adapter: string) {
  * 模型 / 思考档位下拉框按所选 CLI 渲染。
  * WorkBuddy：后端白名单 + 「跟随 CLI 默认（由当前账号决定）」；
  * Codex：Codex 模型清单（默认 gpt-5.6-sol）+ 「跟随本机 Codex 配置」；已保存的自定义模型名原样保留为一个选项。
+ * Claude Code：sonnet / opus / haiku + 「跟随当前登录账号的默认」。
  */
 function renderAiEngineCliProfileControls(adapter: string) {
   const codex = adapter === "codex";
+  const claude = adapter === "claude";
   const draft = aiEngineCliDrafts[adapter] || { model: "", effort: "" };
   const modelSelect = qs<HTMLSelectElement>("#aiEngineCliModel");
   if (modelSelect) {
     // WorkBuddy 的留空 = 不传 --model，由 CLI 按其**当前登录账号**的默认模型执行。
     // ⚠️ 不要写死默认值：实测同一台机器上，CLI 默认档会随 workbuddy switch 切换账号而变。
-    const modelOptions = codex
+    const modelOptions = claude
+      ? [
+        { id: "", label: "跟随 Claude 当前登录账号的默认", note: "不传 --model，由 Claude Code 按当前登录账号 / 订阅的默认模型执行" },
+        ...aiEngineClaudeModels.map((item) => ({ id: item.id, label: item.label, note: item.note }))
+      ]
+      : codex
       ? [
         { id: "", label: "跟随本机 Codex 配置（~/.codex/config.toml）", note: "不传 -m，由本机 Codex 配置里的默认模型执行" },
         ...aiEngineCodexModels.map((item) => ({ id: item.id, label: item.label, note: item.note }))
@@ -212,9 +235,9 @@ function renderAiEngineCliProfileControls(adapter: string) {
   }
   const effortSelect = qs<HTMLSelectElement>("#aiEngineCliEffort");
   if (effortSelect) {
-    const efforts = codex ? aiEngineCodexEfforts : aiEngineCliEfforts;
+    const efforts = claude ? aiEngineClaudeEfforts : codex ? aiEngineCodexEfforts : aiEngineCliEfforts;
     const effortOptions = [
-      { id: "", label: codex ? "跟随 Codex 默认" : "跟随 CLI 默认" },
+      { id: "", label: claude ? "跟随 Claude 默认" : codex ? "跟随 Codex 默认" : "跟随 CLI 默认" },
       ...efforts.map((id) => ({ id, label: id }))
     ];
     effortSelect.innerHTML = effortOptions
@@ -231,23 +254,25 @@ function renderAiEngineCliProfileControls(adapter: string) {
 function renderAiEngineCliStatus(adapter: string) {
   const status = qs<HTMLElement>("#aiEngineCliStatus");
   if (!status) return;
-  const other = adapter === "codex" ? "workbuddy" : "codex";
   const availability = (key: string) => aiEngineAdapterAvailability[key] ?? aiEngineRunners.some((item) => item.online && item.capabilities.includes(key));
   const preferredReady = availability(adapter);
-  const otherReady = availability(other);
-  const runnerName = aiEngineRunners.find((item) => item.online && item.capabilities.includes(preferredReady ? adapter : other))?.displayName || "";
-  const draft = aiEngineCliDrafts[preferredReady ? adapter : other] || { model: "", effort: "" };
-  const modelLabel = draft.model || ((preferredReady ? adapter : other) === "codex" ? "跟随本机 Codex 配置" : "跟随 CLI 默认（由当前账号决定）");
-  const both = `WorkBuddy CLI ${availability("workbuddy") ? "可用" : "未检测到"} · Codex CLI ${availability("codex") ? "可用" : "未检测到"}`;
+  // 首选不可用时实际会用的 CLI：按固定回退顺序找第一个可用的
+  const actual = preferredReady ? adapter : aiEngineAdapterFallbackOrder(adapter).find((key) => availability(key)) || "";
+  const runnerName = actual ? aiEngineRunners.find((item) => item.online && item.capabilities.includes(actual))?.displayName || "" : "";
+  const draft = aiEngineCliDrafts[actual || adapter] || { model: "", effort: "" };
+  const modelLabel = draft.model || (actual === "codex" ? "跟随本机 Codex 配置" : actual === "claude" ? "跟随 Claude 当前账号默认" : "跟随 CLI 默认（由当前账号决定）");
+  const all = ["workbuddy", "codex", "claude"].map((key) => `${aiEngineAdapterName(key)} ${availability(key) ? "可用" : "未检测到"}`).join(" · ");
+  // 三个 CLI 各自的可用性放进悬停提示，徽标本身保持简短（否则会把旁边的标题列挤窄）
+  status.title = all;
   if (preferredReady) {
     status.className = "badge green";
-    status.textContent = `已就绪：${aiEngineAdapterName(adapter)} · ${runnerName} · 模型 ${modelLabel}（${both}）`;
-  } else if (otherReady) {
+    status.textContent = `已就绪：${aiEngineAdapterName(adapter)} · ${runnerName} · 模型 ${modelLabel}`;
+  } else if (actual) {
     status.className = "badge amber";
-    status.textContent = `没有在线的 ${aiEngineAdapterName(adapter)}，将自动改用 ${aiEngineAdapterName(other)} · ${runnerName} · 模型 ${modelLabel}（${both}）`;
+    status.textContent = `没有在线的 ${aiEngineAdapterName(adapter)}，将自动改用 ${aiEngineAdapterName(actual)} · ${runnerName} · 模型 ${modelLabel}`;
   } else {
     status.className = "badge amber";
-    status.textContent = `未就绪：没有在线的 WorkBuddy CLI 或 Codex CLI，请到「集成中心 · 本地 Runner」配对`;
+    status.textContent = `未就绪：没有在线的 WorkBuddy、Codex 或 Claude Code CLI，请到「集成中心 · 本地 Runner」配对`;
   }
 }
 
@@ -259,11 +284,13 @@ export async function saveAiEngineSettings(button?: HTMLButtonElement) {
     researchSource: qs<HTMLSelectElement>("#aiEngineResearchSource")?.value || aiEngineSettings.researchSource,
     emailSource: qs<HTMLSelectElement>("#aiEngineEmailSource")?.value || aiEngineSettings.emailSource,
     cliAdapter: qs<HTMLSelectElement>("#aiEngineCliAdapter")?.value || aiEngineSettings.cliAdapter,
-    // 两个 CLI 的模型 / 档位分开保存（下拉框里显示的是当前所选 CLI 的那一份）
+    // 各 CLI 的模型 / 档位分开保存（下拉框里显示的是当前所选 CLI 的那一份）
     cliModel: aiEngineCliDrafts.workbuddy?.model ?? aiEngineSettings.cliModel,
     cliEffort: aiEngineCliDrafts.workbuddy?.effort ?? aiEngineSettings.cliEffort,
     codexModel: aiEngineCliDrafts.codex?.model ?? aiEngineSettings.codexModel ?? "gpt-5.6-sol",
     codexEffort: aiEngineCliDrafts.codex?.effort ?? aiEngineSettings.codexEffort ?? "",
+    claudeModel: aiEngineCliDrafts.claude?.model ?? aiEngineSettings.claudeModel ?? "sonnet",
+    claudeEffort: aiEngineCliDrafts.claude?.effort ?? aiEngineSettings.claudeEffort ?? "",
     cliWorkspace: qs<HTMLInputElement>("#aiEngineCliWorkspace")?.value.trim() || "",
     cliTimeoutSeconds: Math.max(1, Math.round(Number(qs<HTMLInputElement>("#aiEngineCliTimeout")?.value || "15") || 15)) * 60,
     runnerId: qs<HTMLSelectElement>("#aiEngineRunner")?.value || ""

@@ -3258,7 +3258,10 @@ export function currentLeadFinderResults(opportunities = state.websiteOpportunit
   // 若只按任务 resultIds 过滤，这些候选在「可加入搜客清单的候选」里永远不可见
   // （2026-10-07 用户反馈：新增候选在候选与搜客清单都看不到）。这里把本机 CLI 获客的
   // 候选并入候选列表，业务员照常勾选后「加入搜客清单」即可进入搜客清单页。
-  return opportunities.filter((item) => ids.has(item.id) || item.source === "cli_acquisition");
+  // 「自动流获客」走的是 Lfind 路径（source = "lfind"），同样不经过搜客任务流水线、没有 resultIds 可挂：
+  // 以前它的候选既不在这里、又不在搜客清单（加入清单是显式动作），于是流程跑完候选池一直是空的
+  // （2026-11-13 实测：库里 10 家 lfind 候选，搜客页「候选入池」为 0）。一并纳入。
+  return opportunities.filter((item) => ids.has(item.id) || item.source === "cli_acquisition" || item.source === "lfind");
 }
 
 export function leadFinderLiveStage(job: LeadFinderJob) {

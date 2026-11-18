@@ -18,7 +18,7 @@ import { getAppSetting, setAppSetting } from "./app-settings.js";
 
 export type ResearchEngineSource = "crm" | "ai" | "cli";
 export type EmailEngineSource = "template" | "ai" | "cli";
-export type AiEngineAdapter = "workbuddy" | "codex";
+export type AiEngineAdapter = "workbuddy" | "codex" | "claude";
 
 // ---------------------------------------------------------------------------
 // CLI 模型与思考档位
@@ -86,6 +86,23 @@ export const AI_ENGINE_CODEX_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$
 /** Codex 支持的思考档位；CRM 里更高的 xhigh / max 在 Runner 侧按 high 执行 */
 export const AI_ENGINE_CODEX_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 
+// ---------------------------------------------------------------------------
+// Claude Code CLI 的模型（订阅登录，不需要 API Key）
+//
+// 与 WorkBuddy / Codex 的命名都不相通，必须单独存（claudeModel / claudeEffort）。
+// 接受别名（opus / sonnet / haiku）和完整模型 ID（如 claude-opus-5-5、opus[1m]），
+// 所以这里不做封闭白名单，只做安全字符检查；Runner 侧按同样的规则再挡一道（claudeModelAllowed）。
+// ---------------------------------------------------------------------------
+export const AI_ENGINE_CLAUDE_MODELS: AiEngineCliModelOption[] = [
+  { id: "sonnet", label: "sonnet · 系统默认", note: "速度与质量均衡，背调、写开发信、资料识别都够用；未配置时即用它" },
+  { id: "opus", label: "opus · 最强", note: "推理最充分，适合复杂背调与长文分析，额度消耗也最快" },
+  { id: "haiku", label: "haiku · 最快", note: "最轻最快，适合资料识别这类抽取任务" }
+];
+export const AI_ENGINE_CLAUDE_MODEL_DEFAULT = "sonnet";
+export const AI_ENGINE_CLAUDE_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,63}$/u;
+/** Claude Code 支持的思考档位（比 WorkBuddy 少 minimal）；留空 = 跟随 Claude 默认 */
+export const AI_ENGINE_CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
 /** 思考档位（与 Runner 的 EFFORT_LEVELS 一致）；留空 = 跟随 CLI 默认 */
 export const AI_ENGINE_CLI_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -118,6 +135,10 @@ export interface TeamAiEngineSettings {
   codexModel: string;
   /** 选用 Codex CLI 时的思考档位（minimal / low / medium / high）。留空 = 跟随 Codex 默认 */
   codexEffort: string;
+  /** 选用 Claude Code CLI 时的模型（别名或完整 ID）。留空 = 跟随 Claude 当前登录账号的默认 */
+  claudeModel: string;
+  /** 选用 Claude Code CLI 时的思考档位（low / medium / high / xhigh / max）。留空 = 跟随 Claude 默认 */
+  claudeEffort: string;
   /** 走 CLI 时在哪个工作目录里执行（必须是 Runner 已授权的目录） */
   cliWorkspace: string;
   /** 走 CLI 时的最长执行时间（秒） */
@@ -130,7 +151,7 @@ export interface TeamAiEngineSettings {
 
 export const RESEARCH_ENGINE_SOURCES: ResearchEngineSource[] = ["crm", "ai", "cli"];
 export const EMAIL_ENGINE_SOURCES: EmailEngineSource[] = ["template", "ai", "cli"];
-export const AI_ENGINE_ADAPTERS: AiEngineAdapter[] = ["workbuddy", "codex"];
+export const AI_ENGINE_ADAPTERS: AiEngineAdapter[] = ["workbuddy", "codex", "claude"];
 
 /** CLI 任务的默认与边界（秒）：默认 15 分钟，最长 24 小时，与 Runner 任务上限一致 */
 export const AI_ENGINE_CLI_TIMEOUT_DEFAULT = 900;
@@ -149,7 +170,7 @@ export function aiEngineSourceLabel(source: string) {
 }
 
 export function aiEngineAdapterLabel(adapter: AiEngineAdapter) {
-  return adapter === "codex" ? "Codex CLI" : "WorkBuddy CLI";
+  return adapter === "codex" ? "Codex CLI" : adapter === "claude" ? "Claude Code CLI" : "WorkBuddy CLI";
 }
 
 export function clampAiEngineTimeout(value: number) {
@@ -169,6 +190,8 @@ export function defaultTeamAiEngineSettings(teamId: string): TeamAiEngineSetting
     cliEffort: "",
     codexModel: AI_ENGINE_CODEX_MODEL_DEFAULT,
     codexEffort: "",
+    claudeModel: AI_ENGINE_CLAUDE_MODEL_DEFAULT,
+    claudeEffort: "",
     cliWorkspace: "",
     cliTimeoutSeconds: AI_ENGINE_CLI_TIMEOUT_DEFAULT,
     runnerId: "",
@@ -215,6 +238,16 @@ export function sanitizeTeamAiEngineSettings(
   const codexEffort = !codexEffortRaw || (AI_ENGINE_CODEX_EFFORTS as readonly string[]).includes(codexEffortRaw)
     ? codexEffortRaw
     : (fallback.codexEffort ?? "");
+  // Claude 模型 / 档位：与 Codex 同样的规则——空串 = 跟随 CLI；非空须符合安全字符（会作为 --model 传给 CLI）。
+  // 老数据没有这两个字段时落到出厂默认。
+  const claudeModelRaw = typeof raw.claudeModel === "string" ? raw.claudeModel.trim() : (fallback.claudeModel ?? AI_ENGINE_CLAUDE_MODEL_DEFAULT);
+  const claudeModel = !claudeModelRaw || AI_ENGINE_CLAUDE_MODEL_PATTERN.test(claudeModelRaw)
+    ? claudeModelRaw
+    : (fallback.claudeModel ?? AI_ENGINE_CLAUDE_MODEL_DEFAULT);
+  const claudeEffortRaw = typeof raw.claudeEffort === "string" ? raw.claudeEffort.trim().toLowerCase() : (fallback.claudeEffort ?? "");
+  const claudeEffort = !claudeEffortRaw || (AI_ENGINE_CLAUDE_EFFORTS as readonly string[]).includes(claudeEffortRaw)
+    ? claudeEffortRaw
+    : (fallback.claudeEffort ?? "");
   const cliWorkspace = typeof raw.cliWorkspace === "string"
     ? raw.cliWorkspace.trim().slice(0, 1000)
     : fallback.cliWorkspace;
@@ -231,6 +264,8 @@ export function sanitizeTeamAiEngineSettings(
     cliEffort,
     codexModel,
     codexEffort,
+    claudeModel,
+    claudeEffort,
     cliWorkspace,
     cliTimeoutSeconds,
     runnerId,
@@ -245,14 +280,29 @@ export function sanitizeTeamAiEngineSettings(
  * 不能把 WorkBuddy 的 deepseek-v4.1-flash 之类传给 Codex。
  */
 export function engineCliProfile(settings: TeamAiEngineSettings, adapter: AiEngineAdapter): { model: string; effort: string } {
-  return adapter === "codex"
-    ? { model: settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT, effort: settings.codexEffort ?? "" }
-    : { model: settings.cliModel, effort: settings.cliEffort };
+  if (adapter === "codex") return { model: settings.codexModel ?? AI_ENGINE_CODEX_MODEL_DEFAULT, effort: settings.codexEffort ?? "" };
+  if (adapter === "claude") return { model: settings.claudeModel ?? AI_ENGINE_CLAUDE_MODEL_DEFAULT, effort: settings.claudeEffort ?? "" };
+  return { model: settings.cliModel, effort: settings.cliEffort };
 }
 
-/** 另一个 CLI（首选的 CLI 在执行机上不可用时自动改用它） */
+/**
+ * 首选 CLI 在执行机上不可用时的回退顺序（不含首选本身）。
+ * 先保留 WorkBuddy ↔ Codex 的既有互备关系，Claude Code 排在最后——
+ * 这样老团队没配 Claude 时行为与以前完全一致。
+ */
+const AI_ENGINE_ADAPTER_FALLBACKS: Record<AiEngineAdapter, AiEngineAdapter[]> = {
+  workbuddy: ["codex", "claude"],
+  codex: ["workbuddy", "claude"],
+  claude: ["workbuddy", "codex"]
+};
+
+export function aiEngineAdapterFallbacks(adapter: AiEngineAdapter): AiEngineAdapter[] {
+  return AI_ENGINE_ADAPTER_FALLBACKS[adapter] ?? ["workbuddy", "codex", "claude"].filter((item) => item !== adapter) as AiEngineAdapter[];
+}
+
+/** 首选之外的第一个备选 CLI（兼容只需要「另一个」的老调用） */
 export function otherAiEngineAdapter(adapter: AiEngineAdapter): AiEngineAdapter {
-  return adapter === "codex" ? "workbuddy" : "codex";
+  return aiEngineAdapterFallbacks(adapter)[0];
 }
 
 export async function readTeamAiEngineSettings(teamId: string): Promise<TeamAiEngineSettings> {

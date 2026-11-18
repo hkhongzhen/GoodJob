@@ -13,6 +13,7 @@ export interface LocalRunner {
   runnerVersion: string;
   codexVersion: string;
   workbuddyVersion: string;
+  claudeVersion?: string;
   capabilities: string[];
   workspaces: string[];
   lastSeenAt: string;
@@ -22,7 +23,7 @@ export interface LocalRunner {
   revokedAt: string;
 }
 
-export type LocalRunnerAdapter = "codex" | "workbuddy";
+export type LocalRunnerAdapter = "codex" | "workbuddy" | "claude";
 
 export interface LocalRunnerTask {
   id: string;
