@@ -2370,8 +2370,8 @@ async function saveProspectVerification(item: WebsiteOpportunity, button?: HTMLB
 }
 
 /**
- * W2 · 发信资格灯：把后端下发的 emailEligibility 渲染成三态徽标。
- * 绿=可发信、黄=缺邮箱、红=已抑制；title 带原始原因码与说明，便于排查。
+ * W2 · 发信资格灯：把后端下发的 emailEligibility 渲染成四态徽标。
+ * 绿=可发信、黄=缺邮箱、红=已抑制或邮箱退信；title 带原始原因码与说明，便于排查。
  * 判定完全在后端（复用 assertProspectEmailOutreachEligible 的同一套分支），前端只负责呈现。
  */
 export function prospectEmailEligibilityBadge(item: WebsiteOpportunity) {

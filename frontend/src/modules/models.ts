@@ -2005,10 +2005,10 @@ export interface WebsiteOpportunity {
     startedAt: string;
     completedAt: string;
   }>;
-  /** 发信资格灯：可发信 / 缺邮箱 / 已抑制（附原始原因码）。由 /api/tools/website-opportunities 下发。 */
+  /** 发信资格灯：可发信 / 缺邮箱 / 已抑制 / 邮箱退信（附原始原因码）。由 /api/tools/website-opportunities 下发。 */
   emailEligibility?: {
     ready: boolean;
-    state: "ready" | "missing_email" | "blocked";
+    state: "ready" | "missing_email" | "blocked" | "bounced";
     label: string;
     code: string;
     message: string;

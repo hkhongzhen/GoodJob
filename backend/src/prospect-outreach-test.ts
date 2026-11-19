@@ -3,6 +3,7 @@ import {
   migrateProspectFollowUpTodos,
   recordProspectTouchpoint
 } from "./prospect-outreach.js";
+import { evaluateProspectEmailOutreachEligibility } from "./prospect-outreach-eligibility.js";
 import { getStore } from "./store.js";
 import type { CrmStore } from "./store.js";
 import type { WebsiteOpportunity } from "./types.js";
@@ -31,6 +32,7 @@ function isolatedStore(): CrmStore {
     prospectContactVerificationSnapshots: [],
     prospectSuppressionEvents: [],
     prospectContactabilityDecisions: [],
+    outboundEmailLogs: [],
     applyProspectQualification: undefined,
     async persist() {
       // Isolated in-memory contract test.
@@ -302,6 +304,57 @@ async function testHistoricalOutboundIsFactOnly() {
   assert.deepEqual(prospect, before);
 }
 
+function bouncedLog(to: string, teamId = "team-a") {
+  return {
+    id: `oel-${to}`,
+    teamId,
+    ownerId: "sales-owner",
+    messageId: `gj-${to}`,
+    entityType: "candidate" as const,
+    entityId: "x",
+    to,
+    subject: "hi",
+    source: "manual",
+    sentAt: at(2),
+    bouncedAt: at(2, 10),
+    createdAt: at(2)
+  };
+}
+
+async function testBouncedAddressTurnsEligibilityLightOff() {
+  const store = isolatedStore();
+  store.outboundEmailLogs = [];
+  const prospect = candidate("bounce-light");
+  store.websiteOpportunities.push(prospect);
+
+  assert.equal(evaluateProspectEmailOutreachEligibility(store, prospect).state, "ready");
+
+  // 退信后：唯一邮箱已退信 → 第四态，不再显示可发信，也不能进批量发送。
+  store.outboundEmailLogs.push(bouncedLog(prospect.contactInfo.toUpperCase()));
+  const bounced = evaluateProspectEmailOutreachEligibility(store, prospect);
+  assert.equal(bounced.ready, false);
+  assert.equal(bounced.state, "bounced");
+  assert.equal(bounced.label, "邮箱退信");
+  assert.equal(bounced.code, "PROSPECT_OUTREACH_RECIPIENT_BOUNCED");
+  assert.equal(bounced.recipient, "");
+
+  // 候选还有其他邮箱 → 跳过已退信的，改用下一个，仍可发信。
+  prospect.extractedContacts = [{ emails: ["info@bounce-light.example.test"] }] as WebsiteOpportunity["extractedContacts"];
+  const fallback = evaluateProspectEmailOutreachEligibility(store, prospect);
+  assert.equal(fallback.state, "ready");
+  assert.equal(fallback.recipient, "info@bounce-light.example.test");
+
+  // 其他团队的退信不影响本团队。
+  const other = isolatedStore();
+  other.outboundEmailLogs = [bouncedLog(prospect.contactInfo, "team-b")];
+  const unaffected = candidate("bounce-light");
+  assert.equal(evaluateProspectEmailOutreachEligibility(other, unaffected).state, "ready");
+
+  // 显式指定收件地址时只判定该地址：已退信的地址即使有备用邮箱也不放行。
+  const explicit = evaluateProspectEmailOutreachEligibility(store, prospect, undefined, prospect.contactInfo);
+  assert.equal(explicit.state, "bounced");
+}
+
 await testOutboundIdempotencyAndTodoReuse();
 await testReplyReschedulesExistingTodo();
 await testSuppressionCancelsActiveTodo();
@@ -309,5 +362,6 @@ await testBounceMarksChannelInvalid();
 await testLeadMigrationReusesOutreachData();
 await testOwnerIsolation();
 await testHistoricalOutboundIsFactOnly();
+await testBouncedAddressTurnsEligibilityLightOff();
 
 console.log("Prospect outreach tests passed");

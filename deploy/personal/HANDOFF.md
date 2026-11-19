@@ -61,9 +61,13 @@
 
 ## 6. 待办 / 已知问题
 
-1. **退信后「可发信」灯仍是绿色（建议修）**。退信处理（`backend/src/prospect-outreach.ts`）把候选标成 `outreachState = "contact_invalid"`、联系方式状态 `bounced`、取消该渠道待办，但「发信资格灯」（`backend/src/prospect-outreach-eligibility.ts` 的 `evaluateProspectEmailOutreachEligibility`）只认 `suppressed / excluded / do_not_contact`，所以退信后仍显示「可发信」，也允许对同一个已退信地址再发。建议：
-   - 资格灯增加第四态「邮箱退信」：当解析出的收件地址在 `outbound_email_logs` 里已有 `bounced_at`（同团队、忽略大小写）时返回 `ready=false`，前端 `frontend/src/modules/prospecting.ts`（约 2374 行）补对应颜色；
-   - 只拦「这个地址」，不拦整个企业——换一个邮箱应当可以继续发。
+1. **退信后「可发信」灯仍是绿色**——已在分支 `fix/bounced-eligibility-light` 修复（**未部署**）。`evaluateProspectEmailOutreachEligibility`（`backend/src/prospect-outreach-eligibility.ts`）新增第四态 `bounced`（标签「邮箱退信」，红色）：
+   - 按**收件地址**判定：该团队 `outbound_email_logs` 里存在 `bounced_at` 的地址（忽略大小写）视为已退信；
+   - 候选有多个邮箱时，跳过已退信的，改用下一个，仍是「可发信」；全部退信才显示「邮箱退信」；
+   - 显式传入收件地址时只判定该地址；
+   - 批量发信/自动发信方案/批次放行复核都走这个函数，所以不会再向已退信地址发。
+   - 未覆盖：线索/客户页的手动发信（`assertCrmOutreachEligible`）仍不拦已退信地址；退信是永久记录，不区分临时退信（如邮箱已满）。
+   测试：`backend/src/prospect-outreach-test.ts` 的 `testBouncedAddressTurnsEligibilityLightOff`。
 2. 退信 ≠ 企业没价值。退信通知只有 "Email delivery failed <地址>"（来自发信邮箱服务商的 mailer-daemon），不含原因码。多数是猜的个人邮箱不存在，应补发其他地址（官网公开邮箱、info@/sales@、LinkedIn、电话）。
 3. 发信信誉：新域名发信，目前样本里 12 封约 2 封退信（~17%）。退信率高会被邮箱服务商限速甚至停发。建议：只发已验证/官网公开的地址；检查发信域名的 SPF、DKIM、DMARC（邮箱设置页的 DKIM 区目前没配）。
 4. 邮箱设置页偶尔显示为空表单（见第 7 节）：**空表单状态下不要点「保存邮箱设置」或「清空邮箱绑定」**，会把服务器上的真实配置覆盖掉。

@@ -316,12 +316,12 @@ export function assertProspectEmailOutreachEligible(
   };
 }
 
-export type ProspectEmailOutreachState = "ready" | "missing_email" | "blocked";
+export type ProspectEmailOutreachState = "ready" | "missing_email" | "blocked" | "bounced";
 
 export interface ProspectEmailOutreachEligibility {
   ready: boolean;
   state: ProspectEmailOutreachState;
-  /** 展示用短标签：可发信 / 缺邮箱 / 已抑制 */
+  /** 展示用短标签：可发信 / 缺邮箱 / 已抑制 / 邮箱退信 */
   label: string;
   code: string;
   message: string;
@@ -332,15 +332,34 @@ const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
 const EMAIL_STATE_LABELS: Record<ProspectEmailOutreachState, string> = {
   ready: "可发信",
   missing_email: "缺邮箱",
-  blocked: "已抑制"
+  blocked: "已抑制",
+  bounced: "邮箱退信"
 };
 
-function firstEmail(...values: Array<string | undefined>) {
+function allEmails(...values: Array<string | undefined>) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const pattern = new RegExp(EMAIL_PATTERN.source, "giu");
   for (const value of values) {
-    const match = String(value || "").match(EMAIL_PATTERN);
-    if (match) return match[0].trim();
+    for (const match of String(value || "").matchAll(pattern)) {
+      const email = match[0].trim();
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(email);
+    }
   }
-  return "";
+  return result;
+}
+
+/** 该团队已发生退信的收件地址（小写）。退信记录来自收件同步写入的发信台账 bouncedAt。 */
+function bouncedRecipients(store: CrmStore, teamId: string) {
+  const bounced = new Set<string>();
+  for (const log of store.outboundEmailLogs || []) {
+    if (!log.bouncedAt || log.teamId !== teamId) continue;
+    for (const email of allEmails(log.to)) bounced.add(email.toLowerCase());
+  }
+  return bounced;
 }
 
 /**
@@ -366,21 +385,37 @@ export function evaluateProspectEmailOutreachEligibility(
   const extracted = (candidate.extractedContacts || [])
     .map((item) => (item.emails || []).join(" "))
     .join(" ");
-  const recipient = firstEmail(
-    recipientOverride,
-    approvedEmail,
-    candidate.lastDevelopmentEmailTo,
-    candidate.contactInfo,
-    candidate.contact,
-    extracted
-  );
-  if (!recipient) {
+  // 调用方显式给了收件地址时只判定它本身；否则候选的邮箱按优先级排序，
+  // 已退信的地址会被跳过，改用下一个可用地址（换邮箱应当可以继续发）。
+  const overrideEmails = allEmails(recipientOverride);
+  const emails = overrideEmails.length
+    ? overrideEmails.slice(0, 1)
+    : allEmails(
+        approvedEmail,
+        candidate.lastDevelopmentEmailTo,
+        candidate.contactInfo,
+        candidate.contact,
+        extracted
+      );
+  if (!emails.length) {
     return {
       ready: false,
       state: "missing_email",
       label: EMAIL_STATE_LABELS.missing_email,
       code: "PROSPECT_OUTREACH_RECIPIENT_MISSING",
       message: "该候选还没有可用邮箱，先补全联系方式",
+      recipient: ""
+    };
+  }
+  const bounced = bouncedRecipients(store, candidate.teamId);
+  const recipient = emails.find((email) => !bounced.has(email.toLowerCase())) || "";
+  if (!recipient) {
+    return {
+      ready: false,
+      state: "bounced",
+      label: EMAIL_STATE_LABELS.bounced,
+      code: "PROSPECT_OUTREACH_RECIPIENT_BOUNCED",
+      message: `该邮箱已退信（${emails.join("、")}），请补充其他有效邮箱后再发`,
       recipient: ""
     };
   }
