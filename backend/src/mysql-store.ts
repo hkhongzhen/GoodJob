@@ -6270,7 +6270,7 @@ async function ensureSchema(pool: mysql.Pool) {
     subject VARCHAR(180) DEFAULT '',
     content TEXT,
     related_type VARCHAR(30) DEFAULT '',
-    related_id VARCHAR(64) DEFAULT '',
+    related_id VARCHAR(255) DEFAULT '',
     idempotency_key VARCHAR(256) NULL,
     read_at DATETIME NULL,
     created_at DATETIME NULL,
@@ -6280,6 +6280,13 @@ async function ensureSchema(pool: mysql.Pool) {
     INDEX idx_internal_messages_team(team_id)
   )`);
   await ensureColumn(pool, "internal_messages", "idempotency_key", "VARCHAR(256) NULL");
+  // 旧库的 related_id 为 VARCHAR(64)，装不下邮件 Message-ID，会让退信通知写入失败并使后端崩溃重启。
+  const [relatedIdInfo] = await pool.query(
+    "SELECT CHARACTER_MAXIMUM_LENGTH AS len FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'internal_messages' AND column_name = 'related_id'"
+  );
+  if (Number((relatedIdInfo as Array<{ len: number }>)[0]?.len || 0) < 255) {
+    await pool.query("ALTER TABLE internal_messages MODIFY related_id VARCHAR(255) DEFAULT ''");
+  }
   await ensureUniqueIndex(pool, "internal_messages", "uk_internal_messages_idempotency", ["recipient_id", "idempotency_key"]);
 }
 

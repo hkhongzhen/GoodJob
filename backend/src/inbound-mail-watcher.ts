@@ -462,7 +462,7 @@ export class InboundMailWatcher {
         subject: bounce ? "开发信发生退信" : "收到开发信回复",
         content: `${objectName || log.to} · ${subject}`.slice(0, 5000),
         relatedType: "email_return",
-        relatedId: log.messageId,
+        relatedId: log.messageId.slice(0, 255),
         idempotencyKey: notificationKey,
         readAt: "",
         createdAt: now,
