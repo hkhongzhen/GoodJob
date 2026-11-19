@@ -2377,7 +2377,9 @@ async function saveProspectVerification(item: WebsiteOpportunity, button?: HTMLB
 export function prospectEmailEligibilityBadge(item: WebsiteOpportunity) {
   const eligibility = item.emailEligibility;
   if (!eligibility) return "";
-  const tone = eligibility.ready ? "green" : eligibility.state === "missing_email" ? "amber" : "red";
+  const tone = eligibility.ready
+    ? (eligibility.skippedBounced?.length ? "amber" : "green")
+    : eligibility.state === "missing_email" ? "amber" : "red";
   const title = `[${eligibility.code}] ${eligibility.message}`;
   return `<span class="prospect-eligibility" title="${escapeHtml(title)}">${badge(eligibility.label, tone)}</span>`;
 }

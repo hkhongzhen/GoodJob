@@ -317,7 +317,12 @@ const lfindSearchReportSchema = z.object({
 
 export const lfindResultSchema = z.object({
   version: z.literal("goodjob-lfind-v1").default("goodjob-lfind-v1"),
-  summary: z.object({
+  // CLI 偶尔把 summary 写成一句话而不是对象（2026-11-19 自动流「获客」因此整份结果被判失败）：
+  // 文字按「本次目标」收下，其余字段取默认值，而不是让已跑出来的结果作废。
+  summary: z.preprocess((value) => {
+    if (typeof value === "string") return { target: value.slice(0, 500) };
+    return value;
+  }, z.object({
     target: z.string().trim().max(500).default(""),
     markets: z.array(z.string().trim().max(100)).max(30).default([]),
     products: z.array(z.string().trim().max(120)).max(30).default([]),
@@ -326,7 +331,7 @@ export const lfindResultSchema = z.object({
     accepted: z.number().int().min(0).default(0),
     skipped: z.number().int().min(0).default(0),
     noResultReason: z.string().trim().max(1000).default("")
-  }).passthrough().default({}),
+  }).passthrough().default({})),
   opportunities: z.array(z.object({
     company: z.string().trim().min(1).max(240),
     business: z.string().trim().max(800).default("待维护"),

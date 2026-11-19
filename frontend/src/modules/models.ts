@@ -2013,6 +2013,7 @@ export interface WebsiteOpportunity {
     code: string;
     message: string;
     recipient: string;
+    skippedBounced?: string[];
   };
   selected?: boolean;
   ownerId?: string;

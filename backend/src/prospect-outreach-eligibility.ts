@@ -326,6 +326,8 @@ export interface ProspectEmailOutreachEligibility {
   code: string;
   message: string;
   recipient: string;
+  /** 因已退信而被跳过的邮箱；非空表示当前收件人是备用邮箱（灯仍可发，但界面应提示） */
+  skippedBounced?: string[];
 }
 
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
@@ -335,6 +337,7 @@ const EMAIL_STATE_LABELS: Record<ProspectEmailOutreachState, string> = {
   blocked: "已抑制",
   bounced: "邮箱退信"
 };
+const READY_FALLBACK_LABEL = "可发信·备用邮箱";
 
 function allEmails(...values: Array<string | undefined>) {
   const seen = new Set<string>();
@@ -421,6 +424,18 @@ export function evaluateProspectEmailOutreachEligibility(
   }
   try {
     const result = assertProspectEmailOutreachEligible(store, candidate, recipient, at);
+    const skippedBounced = emails.filter((email) => bounced.has(email.toLowerCase()));
+    if (skippedBounced.length) {
+      return {
+        ready: true,
+        state: "ready",
+        label: READY_FALLBACK_LABEL,
+        code: "READY_FALLBACK_RECIPIENT",
+        message: `${skippedBounced.join("、")} 已退信，将改发备用邮箱 ${result.recipient}`,
+        recipient: result.recipient,
+        skippedBounced
+      };
+    }
     return {
       ready: true,
       state: "ready",

@@ -86,6 +86,7 @@
     "test:prospect-lead-conversion": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/prospect-lead-conversion-test.ts",
     "test:prospect-lead-conversion:mysql": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/prospect-lead-conversion-mysql-test.ts",
     "test:prospect-customer-conversion": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/prospect-customer-conversion-test.ts",
+    "test:lfind-result": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/lfind-result-schema-test.ts",
     "test:prospect-outreach": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/prospect-outreach-test.ts",
     "test:prospect-outreach:http": "node ../scripts/run-with-env.mjs NODE_ENV=test JWT_SECRET=goodjob-prospect-outreach-http-test-secret-at-least-32-characters tsx src/prospect-outreach-http-test.ts",
     "test:email-delivery": "node ../scripts/run-with-env.mjs NODE_ENV=test JWT_SECRET=goodjob-email-delivery-test-secret-at-least-32-characters PROVIDER_CREDENTIAL_KEY=goodjob-email-credential-test-key-at-least-32-characters tsx src/email-delivery-security-test.ts",

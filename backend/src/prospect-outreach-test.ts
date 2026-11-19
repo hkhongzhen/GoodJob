@@ -343,6 +343,8 @@ async function testBouncedAddressTurnsEligibilityLightOff() {
   const fallback = evaluateProspectEmailOutreachEligibility(store, prospect);
   assert.equal(fallback.state, "ready");
   assert.equal(fallback.recipient, "info@bounce-light.example.test");
+  assert.equal(fallback.label, "可发信·备用邮箱");
+  assert.deepEqual(fallback.skippedBounced, [prospect.contactInfo]);
 
   // 其他团队的退信不影响本团队。
   const other = isolatedStore();
