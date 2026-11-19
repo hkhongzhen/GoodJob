@@ -18,6 +18,8 @@ export interface AppConfig {
   enableDemoProvider?: boolean;
   autoMigrate?: boolean;
   officialOnly?: boolean;
+  /** 显式放开：生产环境允许非官方通道（Baileys）。默认 false；风险（封号、会话中断）由部署者自行承担。 */
+  allowUnofficialInProduction?: boolean;
   allowPrivateAiEndpoints: boolean;
   baileysProxyUrl?: string;
   metaProxyUrl?: string;
@@ -190,6 +192,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     environment.WHATSAPP_OFFICIAL_ONLY,
     nodeEnv === "production"
   );
+  const allowUnofficialInProduction = parseBoolean(
+    "WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION",
+    environment.WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION,
+    false
+  );
   const metaGraphBaseUrl = parseMetaGraphBaseUrl(environment.META_GRAPH_BASE_URL);
 
   if ((databaseClient === "postgres" || databaseClient === "mysql") && !databaseUrl) {
@@ -204,7 +211,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     if (seedDemo) throw new Error("SEED_DEMO must be false in production");
     if (enableDemoProvider) throw new Error("ALLOW_DEMO_PROVIDER must be false in production");
     if (autoMigrate) throw new Error("AUTO_MIGRATE must be false in production");
-    if (!officialOnly) throw new Error("WHATSAPP_OFFICIAL_ONLY must be true in production");
+    if (!officialOnly && !allowUnofficialInProduction) {
+      throw new Error(
+        "WHATSAPP_OFFICIAL_ONLY must be true in production (or set WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION=true to accept the risk of unofficial channels)"
+      );
+    }
     if (metaGraphBaseUrl && metaGraphBaseUrl !== "https://graph.facebook.com") {
       throw new Error("META_GRAPH_BASE_URL must use https://graph.facebook.com in production");
     }
@@ -226,6 +237,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     enableDemoProvider,
     autoMigrate,
     officialOnly,
+    allowUnofficialInProduction,
     allowPrivateAiEndpoints: parseBoolean(
       "ALLOW_PRIVATE_AI_ENDPOINTS",
       environment.ALLOW_PRIVATE_AI_ENDPOINTS,

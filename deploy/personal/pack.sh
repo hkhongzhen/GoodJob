@@ -15,13 +15,19 @@
 #   4) compose.yml：时区统一（官方只给 mysql 设了 Asia/Shanghai，后端/通信容器是 UTC，导致 expires_at>NOW() 之类
 #      判断全部错位，Runner 配对码永远"已过期"）；给后端挂 /app/backend/.data 持久卷（官网线索入口设置）。
 #
-# 环境变量：GOODJOB_TZ 覆盖容器时区，默认 America/Los_Angeles。
+#   5) compose.yml：GOODJOB_ALLOW_BAILEYS（默认 true）时放开非官方通道 Baileys：
+#      WHATSAPP_OFFICIAL_ONLY=false + WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION=true（后者是 whatsapp-plugin 里新增的显式开关，
+#      没有它生产模式会拒绝启动）。风险：Baileys 不是官方接口，可能被限制或封号；服务器是机房 IP，风险高于家用网络。
+#
+# 环境变量：GOODJOB_TZ 覆盖容器时区，默认 America/Los_Angeles；GOODJOB_ALLOW_BAILEYS=false 关闭 Baileys。
 set -Eeuo pipefail
 umask 027
 
 P="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT=${1:?用法：pack.sh <输出目录>}
 export GOODJOB_TZ="${GOODJOB_TZ:-America/Los_Angeles}"
+export GOODJOB_ALLOW_BAILEYS="${GOODJOB_ALLOW_BAILEYS:-true}"
+[[ "$GOODJOB_ALLOW_BAILEYS" == "true" || "$GOODJOB_ALLOW_BAILEYS" == "false" ]] || { echo "GOODJOB_ALLOW_BAILEYS 只能是 true 或 false" >&2; exit 1; }
 [[ "$GOODJOB_TZ" =~ ^[A-Za-z0-9_+/-]+$ ]] || { echo "GOODJOB_TZ 无效：$GOODJOB_TZ" >&2; exit 1; }
 TS=$(date +%Y%m%d-%H%M%S)
 COMMIT=$(git -C "$P" rev-parse --short HEAD)
@@ -95,6 +101,12 @@ tz_count=$(grep -c "TZ: $GOODJOB_TZ" "$D/compose.yml" || true)
 [[ "$tz_count" == "4" ]] || { echo "compose.yml 时区补丁未生效（期望 4 处，实际 $tz_count）" >&2; exit 1; }
 if grep -q 'Asia/Shanghai' "$D/compose.yml"; then echo "compose.yml 仍含 Asia/Shanghai" >&2; exit 1; fi
 [[ "$(grep -c 'backend_private' "$D/compose.yml" || true)" == "3" ]] || { echo "compose.yml 持久卷补丁未生效" >&2; exit 1; }
+
+if [[ "$GOODJOB_ALLOW_BAILEYS" == "true" ]]; then
+  perl -0pi -e 's/      WHATSAPP_OFFICIAL_ONLY: "true"\n/      WHATSAPP_OFFICIAL_ONLY: "false"\n      WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION: "true"\n/' "$D/compose.yml"
+  grep -q 'WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION: "true"' "$D/compose.yml" || { echo "compose.yml Baileys 补丁未生效" >&2; exit 1; }
+  grep -q 'WHATSAPP_OFFICIAL_ONLY: "false"' "$D/compose.yml" || { echo "compose.yml Baileys 补丁未生效（OFFICIAL_ONLY）" >&2; exit 1; }
+fi
 
 bash -n "$D/install.sh" "$D/configure.sh" "$D/personal-fixups.sh"
 

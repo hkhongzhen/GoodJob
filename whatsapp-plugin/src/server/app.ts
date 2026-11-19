@@ -363,7 +363,11 @@ export async function createAppRuntime(config: AppConfig): Promise<AppRuntime> {
     }
     if (config.seedDemo || demoProviderEnabled) throw new Error("Demo features must be disabled in production");
     if (autoMigrate) throw new Error("AUTO_MIGRATE must be false in production");
-    if (!officialOnly) throw new Error("WHATSAPP_OFFICIAL_ONLY must be true in production");
+    if (!officialOnly && !config.allowUnofficialInProduction) {
+      throw new Error(
+        "WHATSAPP_OFFICIAL_ONLY must be true in production (or set WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION=true to accept the risk of unofficial channels)"
+      );
+    }
     const graphBaseUrl = config.metaGraphBaseUrl?.replace(/\/+$/u, "");
     if (graphBaseUrl && graphBaseUrl !== "https://graph.facebook.com") {
       throw new Error("META_GRAPH_BASE_URL must use https://graph.facebook.com in production");

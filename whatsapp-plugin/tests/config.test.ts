@@ -102,4 +102,14 @@ describe("server configuration", () => {
       /graph\.facebook\.com/u
     );
   });
+
+  it("allows unofficial channels in production only with the explicit opt-in", () => {
+    expect(() => loadConfig(productionEnvironment({ WHATSAPP_OFFICIAL_ONLY: "false" }))).toThrow(/WHATSAPP_OFFICIAL_ONLY/u);
+    const config = loadConfig(
+      productionEnvironment({ WHATSAPP_OFFICIAL_ONLY: "false", WHATSAPP_ALLOW_UNOFFICIAL_IN_PRODUCTION: "true" })
+    );
+    expect(config.officialOnly).toBe(false);
+    expect(config.allowUnofficialInProduction).toBe(true);
+    expect(loadConfig(productionEnvironment({})).allowUnofficialInProduction).toBe(false);
+  });
 });
