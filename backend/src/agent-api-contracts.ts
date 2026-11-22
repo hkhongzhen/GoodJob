@@ -337,6 +337,7 @@ define("POST /api/internal-messages/read-all", emptySchema, "将本人收到的�
 
 define("PUT /api/company-profile", objectSchema([], { companyName: string({ maxLength: 200 }), website: string({ maxLength: 300 }), productSummary: string({ maxLength: 2000 }), address: string({ maxLength: 1000 }), phone: string({ maxLength: 100 }), email: string({ maxLength: 180 }) }), "维护团队公司资料，仅管理员可执行。");
 define("PUT /api/email-tracking/config", objectSchema([], { baseUrl: string({ maxLength: 300 }) }), "配置开发信已读追踪的公网地址（留空 = 关闭追踪）；写库并立即生效，生产环境要求 https。");
+define("PUT /api/email-delivery/bounce-guard", objectSchema(["enabled", "maxBouncePercent", "windowDays", "minSample"], { enabled: boolean(), maxBouncePercent: integer({ minimum: 1, maximum: 100 }), windowDays: integer({ minimum: 1, maximum: 90 }), minSample: integer({ minimum: 1, maximum: 10000 }) }), "调整外发退信保护（近 N 天退信率超阈值即暂停外发）的开关、阈值、窗口与最小样本；仅管理员，写库并立即生效。关闭会放开退信率拦截，需要明确确认。");
 define("PUT /api/system-settings", objectSchema(["requireDocumentExcelApproval"], { requireDocumentExcelApproval: boolean() }), "维护当前团队的系统设置，仅具备系统设置权限的管理员可执行。");
 define("PUT /api/system-settings/ocr", objectSchema([], { provider: oneOf("none", "baidu", "siliconflow"), enabled: boolean(), apiKey: string({ maxLength: 400 }), secretKey: string({ maxLength: 400 }), model: string({ maxLength: 160 }), baseUrl: string({ maxLength: 255 }) }), "维护单证 OCR 供应商配置，仅具备系统设置权限的管理员可执行。");
 define("POST /api/ai-background-research", objectSchema(["entityType", "entityId"], { entityType: oneOf("lead", "customer", "prospect"), entityId: string({ minLength: 1, maxLength: 120 }), source: oneOf("crm", "ai", "cli"), runnerId: string({ maxLength: 80 }) }), "执行客户、线索或搜客候选背调，可能访问外部来源，必须确认目标对象。source 省略时用团队「默认背调来源」；source=cli 表示交给本机已配对的 CLI 联网调研，此时本机必须先有一台在线 Runner。");
@@ -413,6 +414,7 @@ define("PATCH /api/sender-mailboxes/{id}/signature", objectSchema([], {
 }), "只更新发件邮箱池里某个邮箱的署名尾缀（写信/回复时自动带在正文末尾）；留空表示回落账号级邮件签名，不触碰 SMTP/IMAP 凭据。");
 define("DELETE /api/sender-mailboxes/{id}", emptySchema, "从发件邮箱池删除自己名下的一个发件邮箱；删除不可撤销，需要明确确认。");
 define("POST /api/sender-mailboxes/{id}/test", objectSchema([], { to: string({ format: "email", maxLength: 255 }) }), "用发件邮箱池里的指定邮箱发一封测试邮件验证 SMTP 配置；默认发给该邮箱自己。");
+define("POST /api/sender-mailboxes/{id}/make-default", emptySchema, "把发件邮箱池里的指定邮箱设为当前账号的默认发件身份（同步 SMTP/IMAP/DKIM/发件人到账号级配置）；开发信等默认外发路径随之切换。");
 define("PATCH /api/mail-center/accounts/{id}/sync", objectSchema([], {
   syncEnabled: boolean(),
   syncIntervalMinutes: integer({ minimum: 5, maximum: 1440 })

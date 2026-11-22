@@ -1160,16 +1160,68 @@ function assertOutboundEmailRiskPolicy(
   if (domain && domainCount >= domainLimit) {
     throw new Error(`发信保护：同一收件域名 ${domainWindowMinutes} 分钟内最多发送 ${domainLimit} 封`);
   }
-  const bounceWindowDays = positiveEnvironmentNumber("OUTBOUND_EMAIL_BOUNCE_WINDOW_DAYS", 7);
-  const recent = sentLogs.filter((item) => new Date(item.sentAt).getTime() >= now - bounceWindowDays * 86_400_000);
-  const minSample = positiveEnvironmentNumber("OUTBOUND_EMAIL_BOUNCE_MIN_SAMPLE", 20);
-  const maxBouncePercent = positiveEnvironmentNumber("OUTBOUND_EMAIL_MAX_BOUNCE_PERCENT", 10);
-  if (recent.length >= minSample) {
-    const bouncePercent = recent.filter((item) => item.bouncedAt).length * 100 / recent.length;
-    if (bouncePercent >= maxBouncePercent) {
-      throw new Error(`发信保护：近 ${bounceWindowDays} 天退信率 ${bouncePercent.toFixed(1)}%，已暂停外发`);
-    }
+  const bounce = outboundBounceStats(sentLogs, now);
+  if (bounce.triggered) {
+    throw new Error(`发信保护：近 ${bounce.settings.windowDays} 天退信率 ${bounce.percent.toFixed(1)}%，已暂停外发（可在「邮箱设置 → 退信保护」调整阈值或关闭）`);
   }
+}
+
+// ── 退信保护：阈值运行时可调（app_settings 优先，env 兜底），可整体关闭 ──────────
+export const OUTBOUND_BOUNCE_GUARD_KEY = "outbound_bounce_guard";
+
+export interface OutboundBounceGuardSettings {
+  enabled: boolean;
+  maxBouncePercent: number;
+  windowDays: number;
+  minSample: number;
+  source: "app_settings" | "env";
+}
+
+let bounceGuardRuntime: Partial<Omit<OutboundBounceGuardSettings, "source">> | null = null;
+
+/** 运行时覆盖：传 app_settings 里存的 JSON；空串/坏数据 = 回落 env */
+export function setOutboundBounceGuardRuntime(raw: string) {
+  if (!raw.trim()) { bounceGuardRuntime = null; return; }
+  try {
+    const parsed = JSON.parse(raw);
+    bounceGuardRuntime = parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    bounceGuardRuntime = null;
+  }
+}
+
+export function outboundBounceGuardSettings(): OutboundBounceGuardSettings {
+  const env = {
+    enabled: process.env.OUTBOUND_EMAIL_BOUNCE_GUARD !== "false",
+    maxBouncePercent: positiveEnvironmentNumber("OUTBOUND_EMAIL_MAX_BOUNCE_PERCENT", 10),
+    windowDays: positiveEnvironmentNumber("OUTBOUND_EMAIL_BOUNCE_WINDOW_DAYS", 7),
+    minSample: positiveEnvironmentNumber("OUTBOUND_EMAIL_BOUNCE_MIN_SAMPLE", 20)
+  };
+  if (!bounceGuardRuntime) return { ...env, source: "env" };
+  const pick = (value: unknown, fallback: number) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  };
+  return {
+    enabled: typeof bounceGuardRuntime.enabled === "boolean" ? bounceGuardRuntime.enabled : env.enabled,
+    maxBouncePercent: pick(bounceGuardRuntime.maxBouncePercent, env.maxBouncePercent),
+    windowDays: pick(bounceGuardRuntime.windowDays, env.windowDays),
+    minSample: pick(bounceGuardRuntime.minSample, env.minSample),
+    source: "app_settings"
+  };
+}
+
+/** 按当前设置统计某账号窗口内的发信/退信（设置页展示与外发拦截共用一套口径） */
+export function outboundBounceStats(
+  sentLogs: Array<{ sentAt: string; bouncedAt?: string }>,
+  now = Date.now()
+) {
+  const settings = outboundBounceGuardSettings();
+  const recent = sentLogs.filter((item) => new Date(item.sentAt).getTime() >= now - settings.windowDays * 86_400_000);
+  const bounced = recent.filter((item) => item.bouncedAt).length;
+  const percent = recent.length ? bounced * 100 / recent.length : 0;
+  const triggered = settings.enabled && recent.length >= settings.minSample && percent >= settings.maxBouncePercent;
+  return { settings, sent: recent.length, bounced, percent, triggered };
 }
 
 class OutboundEmailDispatchError extends Error {
@@ -6722,6 +6774,7 @@ export async function startServer() {
     validateProviderCredentialSecurity();
     // 追踪公网地址支持「设置页运行时配置」优先于 env（app_settings 持久化）
     setEmailTrackingRuntimeBaseUrl(await getAppSetting(EMAIL_TRACKING_BASE_URL_KEY));
+    setOutboundBounceGuardRuntime(await getAppSetting(OUTBOUND_BOUNCE_GUARD_KEY));
     validateEmailTrackingSecurity();
     validateAgentJobSecurity();
     validateTradeObservationCursorSecurity();

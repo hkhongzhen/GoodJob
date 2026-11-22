@@ -42,6 +42,8 @@ import {
   engineRequestWaitMs,
   getAiConfig,
   latestBackgroundResearch,
+  OUTBOUND_BOUNCE_GUARD_KEY,
+  outboundBounceStats,
   outboundEmailError,
   persistBackgroundResearchRecord,
   recordOutboundEmailLog,
@@ -49,7 +51,8 @@ import {
   runEngineCliJob,
   sendOutboundEmail,
   sendOutboundEmailFailure,
-  sendProspectQualificationError
+  sendProspectQualificationError,
+  setOutboundBounceGuardRuntime
 } from "../server-core.js";
 
 // ── 开发信打开/点击追踪（公开端点，收件人邮件客户端直接访问）────────────
@@ -457,6 +460,39 @@ export function registerMailRoutes(app: Express) {
     res.json({ config: emailTrackingConfigView() });
   }));
 
+  // 退信保护：近 N 天退信率超过阈值即暂停外发；阈值/窗口/最小样本可调，可整体关闭。
+  // GET 同时给出当前账号在该口径下的实际统计，设置页据此显示「是否已触发」。
+  const bounceGuardView = (userId: string) => {
+    const logs = getStore().outboundEmailLogs.filter((item) => item.ownerId === userId && (item.dispatchStatus || "sent") === "sent");
+    const stats = outboundBounceStats(logs);
+    return {
+      config: stats.settings,
+      stats: { sent: stats.sent, bounced: stats.bounced, percent: Number(stats.percent.toFixed(1)), triggered: stats.triggered }
+    };
+  };
+
+  app.get("/api/email-delivery/bounce-guard", requireAuth, asyncRoute(async (req, res) => {
+    res.json(bounceGuardView(req.user!.id));
+  }));
+
+  app.put("/api/email-delivery/bounce-guard", requireAuth, asyncRoute(async (req, res) => {
+    const user = getStore().users.find((item) => item.id === req.user!.id);
+    if (!user || !["admin", "super_admin"].includes(user.role)) {
+      res.status(403).json({ message: "只有管理员可以调整退信保护" });
+      return;
+    }
+    const body = z.object({
+      enabled: z.boolean(),
+      maxBouncePercent: z.number().int().min(1).max(100),
+      windowDays: z.number().int().min(1).max(90),
+      minSample: z.number().int().min(1).max(10_000)
+    }).parse(req.body || {});
+    const raw = JSON.stringify(body);
+    await setAppSetting(OUTBOUND_BOUNCE_GUARD_KEY, raw);
+    setOutboundBounceGuardRuntime(raw);
+    res.json(bounceGuardView(user.id));
+  }));
+
   app.get("/api/outbound-emails/:messageId", requireAuth, asyncRoute(async (req, res) => {
     const store = getStore();
     const ownerId = req.user!.id;
@@ -598,7 +634,47 @@ export function registerMailRoutes(app: Express) {
     const user = getStore().users.find((item) => item.id === req.user!.id);
     if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
     const mailboxes = await repository.list(user.id, user.teamId);
-    res.json({ mailboxes: mailboxes.map(toSenderMailboxView) });
+    const defaultEmail = (user.outboundEmail || "").trim().toLowerCase();
+    res.json({
+      mailboxes: mailboxes.map((mailbox) => ({
+        ...toSenderMailboxView(mailbox),
+        isDefault: Boolean(defaultEmail) && mailbox.email.toLowerCase() === defaultEmail
+      }))
+    });
+  }));
+
+  /** 设为默认：把池内邮箱的 SMTP/IMAP/DKIM/发件人 同步回账号级发件配置。
+   *  用户侧只维护一套账号列表；开发信等仍走 users.* 的路径取到的是默认邮箱身份。 */
+  app.post("/api/sender-mailboxes/:id/make-default", requireAuth, asyncRoute(async (req, res) => {
+    const repository = getSenderMailboxRepository();
+    if (!repository) { res.status(503).json({ message: "发件邮箱池不可用" }); return; }
+    const store = getStore();
+    const user = store.users.find((item) => item.id === req.user!.id);
+    if (!user) { res.status(404).json({ message: "账号不存在" }); return; }
+    const mailbox = await repository.get(user.id, user.teamId, req.params.id);
+    if (!mailbox) { res.status(404).json({ message: "发件邮箱不存在或无权访问" }); return; }
+    if (!mailbox.enabled) {
+      res.status(409).json({ message: "该邮箱已停用，启用后才能设为默认" });
+      return;
+    }
+    const overrides = senderMailboxOverrides(mailbox);
+    user.outboundEmail = overrides.outboundEmail;
+    user.emailSenderName = overrides.emailSenderName || user.emailSenderName || "";
+    user.smtpHost = overrides.smtpHost;
+    user.smtpPort = overrides.smtpPort;
+    user.smtpSecure = overrides.smtpSecure;
+    user.smtpUser = overrides.smtpUser;
+    user.smtpPassword = overrides.smtpPassword;
+    user.imapHost = overrides.imapHost;
+    user.imapPort = overrides.imapPort;
+    user.imapSecure = overrides.imapSecure;
+    user.imapUser = overrides.imapUser;
+    user.imapPassword = overrides.imapPassword;
+    user.dkimDomain = overrides.dkimDomain;
+    user.dkimSelector = overrides.dkimSelector;
+    if (overrides.dkimPrivateKey) user.dkimPrivateKey = overrides.dkimPrivateKey;
+    await store.persist();
+    res.json({ user: accountUser(user) });
   }));
 
   app.post("/api/sender-mailboxes", requireAuth, asyncRoute(async (req, res) => {
@@ -712,8 +788,12 @@ export function registerMailRoutes(app: Express) {
       }
     }
     const stats = await repository.accountStats(user.id, user.teamId, mailboxes.map((item) => item.id));
+    const defaultEmail = (user.outboundEmail || "").trim().toLowerCase();
     res.json({
-      accounts: mailboxes.map((mailbox) => mailAccountOverview(mailbox, stats.get(mailbox.id))),
+      accounts: mailboxes.map((mailbox) => ({
+        ...mailAccountOverview(mailbox, stats.get(mailbox.id)),
+        isDefault: Boolean(defaultEmail) && mailbox.email.toLowerCase() === defaultEmail
+      })),
       limits: { maxAccounts: 10, minIntervalMinutes: 5, maxIntervalMinutes: 1440 }
     });
   }));

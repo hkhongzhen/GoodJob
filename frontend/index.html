@@ -29988,61 +29988,52 @@ body.platform-mode .workspace-tabs { display:none !important; }
           <div class="page-head">
             <div>
               <h1>邮箱设置</h1>
-              <p class="ms-sub">发件身份、SMTP 授权码、发件邮箱池、收信监听与已读追踪。这里配一次，收件箱、自动发信、开发信都走这套身份。</p>
+              <p class="ms-sub">所有邮箱账号一处管理：每个账号自带 SMTP 发件、IMAP 收件与署名尾缀；设一个为「默认」后，开发信与手动发信都走这套身份。已读追踪在下方单独配置。</p>
             </div>
             <div class="head-actions">
               <button class="btn" id="profileDomainAuthButton">域名检测</button>
               <button class="btn" id="profileTestSmtpButton">发送测试邮件</button>
-              <button class="btn danger" id="profileClearEmailButton">清空邮箱绑定</button>
-              <button class="btn primary" id="mailSettingsSaveButton">保存邮箱设置</button>
+              <button class="btn danger" id="profileClearEmailButton">取消默认身份</button>
+              <button class="btn primary" id="mailSettingsSaveButton">保存</button>
             </div>
           </div>
 
           <div class="ms-stack">
             <div class="ms-status">
-              <div><span>绑定状态</span><b id="profileEmailStatus">未绑定</b></div>
+              <div><span>默认发件</span><b id="profileEmailStatus">未设置</b></div>
               <div><span>签名状态</span><b id="profileSignatureStatus">待完善</b></div>
-              <div><span>SMTP状态</span><b id="profileSmtpStatus">未配置</b></div>
+              <div><span>SMTP 通道</span><b id="profileSmtpStatus">未配置</b></div>
             </div>
 
             <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.6 6.4 12 13l8.4-6.6"/></svg></span><div><h2>发件邮箱（SMTP）</h2><small>CRM 就是用这个账号把开发信真实投递出去的</small></div></div></div>
+              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.6 6.4 12 13l8.4-6.6"/></svg></span><div><h2>默认发件身份</h2><small>在下方账号列表里把某个邮箱「设为默认」后，开发信、回信匹配与测试邮件都使用它</small></div></div></div>
               <div class="profile-form-grid" style="margin-top:12px">
-                <div class="form-field"><label>发件邮箱</label><input id="profileOutboundEmail" placeholder="例如 sales@your-company.com"></div>
-                <div class="form-field"><label>发件人名称</label><input id="profileSenderName" placeholder="例如 Sales Team"></div>
-                <div class="form-field"><label>SMTP服务器</label><input id="profileSmtpHost" placeholder="例如 smtp.exmail.qq.com"></div>
-                <div class="form-field"><label>SMTP端口</label><input id="profileSmtpPort" type="number" min="1" max="65535" placeholder="465 或 587"></div>
-                <div class="form-field"><label>SMTP账号</label><input id="profileSmtpUser" placeholder="通常与发件邮箱一致"></div>
-                <div class="form-field"><label>SMTP授权码/密码</label><input id="profileSmtpPassword" type="password" placeholder="输入后覆盖保存；留空则保留"><small id="profileSmtpPasswordHint">保存后不会明文回显。</small></div>
-                <div class="form-field"><label>加密方式</label><select id="profileSmtpSecure"><option value="true">SSL/TLS（465）</option><option value="false">STARTTLS/普通（587）</option></select><small id="profileSmtpConfigHint">465 通常选 SSL/TLS，587 通常选 STARTTLS/普通。</small></div>
-                <div class="form-field"><label>测试收件邮箱</label><input id="profileTestEmailTo" placeholder="可留空，默认发给发件邮箱"></div>
-                <div class="form-field full"><label>邮件签名（通用尾缀）</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Your Name&#10;Your Company"></textarea><small>没有单独设置尾缀的发件邮箱用这一份；在下方「发件邮箱池」里可以给某个邮箱配专属尾缀。</small></div>
-                <div class="form-field"><label>DKIM 域名（可选）</label><input id="profileDkimDomain" placeholder="例如 mail.your-company.com，留空 = 不签名"></div>
-                <div class="form-field"><label>DKIM Selector（可选）</label><input id="profileDkimSelector" placeholder="例如 s1（与 DNS 的 s1._domainkey 记录对应）"></div>
-                <div class="form-field full"><label>DKIM 私钥（可选）</label><textarea id="profileDkimPrivateKey" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea><small id="profileDkimPrivateKeyHint">配置后该邮箱发出的开发信由系统自动完成 DKIM 签名，显著提升进箱率。私钥加密落库、不会明文回显；DNS 侧需同步添加 &lt;selector&gt;._domainkey 的 TXT 公钥记录。</small></div>
-              </div>
-            </section>
-
-            <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><div><h2>收信监听（开发信回流）</h2><small>开启后自动轮询收件箱，识别客户回信与退信，回流到触达记录</small></div></div></div>
-              <div class="profile-form-grid" style="margin-top:12px">
-                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="profileImapEnabled"> 启用 IMAP 收信监听</label></div>
-                <div class="form-field"><label>IMAP服务器</label><input id="profileImapHost" placeholder="例如 imap.exmail.qq.com"></div>
-                <div class="form-field"><label>IMAP端口</label><input id="profileImapPort" type="number" min="1" max="65535" placeholder="993"></div>
-                <div class="form-field"><label>IMAP账号</label><input id="profileImapUser" placeholder="通常与发件邮箱一致"></div>
-                <div class="form-field"><label>IMAP授权码/密码</label><input id="profileImapPassword" type="password" placeholder="输入后覆盖保存；留空则保留"><small>保存后不会明文回显。</small></div>
-                <div class="form-field"><label>加密方式</label><select id="profileImapSecure"><option value="true">SSL/TLS（993）</option><option value="false">STARTTLS/普通（143）</option></select></div>
-                <div class="form-field"><label>最近同步</label><b id="profileImapSyncStatus" class="field-value">尚未同步</b></div>
-                <div class="form-field full"><div class="row-actions"><button class="btn" id="profileTestImapButton" type="button">测试 IMAP</button><button class="btn" id="profileClearImapButton" type="button">清除 IMAP 密码</button></div></div>
+                <div class="form-field full"><b id="profileDefaultMailbox" class="field-value">尚未设置默认邮箱——先在下方添加邮箱，再设为默认</b></div>
+                <div class="form-field"><label>测试收件邮箱</label><input id="profileTestEmailTo" placeholder="可留空，默认发给默认发件邮箱"></div>
+                <div class="form-field full"><label>邮件签名（通用尾缀）</label><textarea id="profileEmailSignature" placeholder="Best regards,&#10;Your Name&#10;Your Company"></textarea><small>没有单独设置尾缀的邮箱用这一份；编辑某个邮箱时可以给它配专属尾缀。</small></div>
               </div>
             </section>
 
             <section class="panel section">
               <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/></svg></span><div><h2>发件邮箱池（轮换发信）</h2><small>登记多个 SMTP 发件邮箱后，自动发信方案可按「每 N 封」轮流使用，降低单个邮箱的发信压力；每个邮箱可配自己的署名尾缀</small></div></div>
-                <div class="head-actions"><button class="btn primary" id="mailboxPoolAddButton" type="button">＋ 登记发件邮箱</button></div>
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16v13H4z"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/></svg></span><div><h2>邮箱账号</h2><small>每个账号一套 SMTP 发件 + IMAP 收件配置；自动发信方案按「每 N 封」轮换，写信时可以手动挑发件人</small></div></div>
+                <div class="head-actions"><button class="btn primary" id="mailboxPoolAddButton" type="button">＋ 添加邮箱</button></div>
               </div>
               <div id="mailboxPoolList" class="mailbox-pool-list"><div class="mailbox-pool-empty">加载中…</div></div>
+            </section>
+
+            <section class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></span><div><h2>退信保护（发信熔断）</h2><small>近 N 天退信率超过阈值时自动暂停外发，防止发信域名信誉被拖垮；阈值可调，也可关闭（仅管理员）</small></div></div>
+                <div class="head-actions"><button class="btn primary" id="bounceGuardSaveButton" type="button">保存</button></div>
+              </div>
+              <div class="form-grid">
+                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="bounceGuardEnabled"> 启用退信保护</label></div>
+                <div class="form-field"><label>退信率阈值（%）</label><input id="bounceGuardPercent" type="number" min="1" max="100" placeholder="10"><small>达到或超过即暂停外发。行业经验：长期高于 5% 就会被邮箱服务商限流。</small></div>
+                <div class="form-field"><label>统计窗口（天）</label><input id="bounceGuardWindow" type="number" min="1" max="90" placeholder="7"><small>只看最近这些天发出的邮件；旧退信滚出窗口后自动解除。</small></div>
+                <div class="form-field"><label>最小样本（封）</label><input id="bounceGuardMinSample" type="number" min="1" max="10000" placeholder="20"><small>窗口内发信少于这个数时不判定，避免一两封退信就熔断。</small></div>
+                <div class="form-field full"><label>当前状态（你的账号）</label><div id="bounceGuardStatus" class="field-value">加载中…</div></div>
+              </div>
             </section>
 
             <section class="panel section">
@@ -30218,6 +30209,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
           #mail-center .mc-account-name { min-width: 0; flex: 1; }
           #mail-center .mc-account-name b { display: block; overflow: hidden; color: var(--mc-ink); font-size: 13px; font-weight: 700; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
           #mail-center .mc-account-name span { display: block; overflow: hidden; margin-top: 2px; color: var(--mc-sub); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+          #mail-center .mc-acc-default { display: inline-block; margin-left: 6px; padding: 1px 7px; border: 1px solid #bbf7d0; border-radius: 999px; background: #f0fdf4; color: #15803d; font-size: 10px; font-weight: 600; vertical-align: 1px; }
           #mail-center .mc-account-figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
           #mail-center .mc-account-figs > span { display: grid; gap: 2px; padding: 8px 9px; border-radius: 10px; background: #f6fafe; border: 1px solid #eff5fc; }
           #mail-center .mc-account-figs b { color: var(--mc-ink); font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.03em; line-height: 1.12; }

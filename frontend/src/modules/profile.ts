@@ -6,7 +6,7 @@
  */
 import { closeModal, confirmAction, openModal, state } from "../prototype-api";
 import { type User } from "./models";
-import { formatTime } from "./dashboard";
+
 import { badge, escapeHtml, qs, qsa, roleLabel, setFieldValue, storage } from "./shared";
 import { loadCompanyProfile, renderEmailConfigurationReminders } from "./development-email";
 import { api, setButtonPending, toast } from "./ui";
@@ -19,6 +19,7 @@ export function renderProfile(user = state.user) {
   const role = qs<HTMLElement>("#profileRoleText");
   const status = qs<HTMLElement>("#profileEmailStatus");
   const signatureStatus = qs<HTMLElement>("#profileSignatureStatus");
+  const defaultMailboxEl = qs<HTMLElement>("#profileDefaultMailbox");
   const teamText = user.teamId === "all" ? "全局团队" : `${user.teamId} 组`;
   const mailReady = Boolean(user.outboundEmail);
   if (avatar) avatar.textContent = user.avatar;
@@ -42,53 +43,34 @@ export function renderProfile(user = state.user) {
   qs<HTMLElement>("#profileIdText")!.textContent = user.id;
   qs<HTMLElement>("#profileScopeText")!.textContent = roleScopeText(user);
   setFieldValue("#profileLoginEmail", user.email);
-  setFieldValue("#profileOutboundEmail", user.outboundEmail || "");
-  setFieldValue("#profileSenderName", user.emailSenderName || "");
   setFieldValue("#profileEmailSignature", user.emailSignature || "");
-  setFieldValue("#profileSmtpHost", user.smtpHost || "");
-  setFieldValue("#profileSmtpPort", String(user.smtpPort || 465));
-  setFieldValue("#profileSmtpUser", user.smtpUser || "");
-  setFieldValue("#profileSmtpPassword", "");
   setFieldValue("#profileTestEmailTo", "");
-  const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure");
-  if (smtpSecure) smtpSecure.value = String(user.smtpSecure ?? true);
-  if (status) status.innerHTML = user.outboundEmail ? `${badge("已绑定", "green")} ${escapeHtml(user.outboundEmail)}` : `${badge("未绑定", "amber")} 请先绑定发件邮箱`;
+  if (status) status.innerHTML = user.outboundEmail ? `${badge("已设置", "green")} ${escapeHtml(user.outboundEmail)}` : `${badge("未设置", "amber")} 在下方把某个邮箱「设为默认」`;
   if (signatureStatus) signatureStatus.innerHTML = user.emailSignature?.trim() ? `${badge("已设置", "green")} ${escapeHtml((user.emailSignature.split("\n")[0] || "签名已维护").slice(0, 36))}` : badge("待完善", "amber");
   const smtpStatus = qs<HTMLElement>("#profileSmtpStatus");
-  if (smtpStatus) smtpStatus.innerHTML = user.smtpHost && user.smtpUser && user.hasSmtpPassword ? `${badge("已配置", "green")} ${escapeHtml(user.smtpHost)}` : `${badge("未完整", "amber")} 填写SMTP后才能真实发信`;
-  const imapEnabled = qs<HTMLInputElement>("#profileImapEnabled");
-  if (imapEnabled) imapEnabled.checked = Boolean(user.inboundSyncEnabled);
-  setFieldValue("#profileImapHost", user.imapHost || "");
-  setFieldValue("#profileImapPort", String(user.imapPort || 993));
-  setFieldValue("#profileImapUser", user.imapUser || "");
-  setFieldValue("#profileImapPassword", "");
-  const imapSecure = qs<HTMLSelectElement>("#profileImapSecure");
-  if (imapSecure) imapSecure.value = String(user.imapSecure ?? true);
-  setFieldValue("#profileDkimDomain", user.dkimDomain || "");
-  setFieldValue("#profileDkimSelector", user.dkimSelector || "");
-  setFieldValue("#profileDkimPrivateKey", "");
-  const imapSync = qs<HTMLElement>("#profileImapSyncStatus");
-  if (imapSync) {
-    if (user.lastInboundSyncAt) {
-      const label = user.lastInboundSyncStatus === "error" ? "同步异常" : "已同步";
-      const cls = user.lastInboundSyncStatus === "error" ? "amber" : "green";
-      imapSync.innerHTML = `${badge(label, cls)} <span title="${escapeHtml(user.lastInboundSyncError || "")}">${escapeHtml(formatTime(user.lastInboundSyncAt))}</span>`;
-    } else {
-      imapSync.textContent = user.inboundSyncEnabled ? "等待首次同步" : "尚未开启";
-    }
+  if (smtpStatus) smtpStatus.innerHTML = user.smtpHost && user.smtpUser && user.hasSmtpPassword ? `${badge("已配置", "green")} ${escapeHtml(user.smtpHost)}` : `${badge("未完整", "amber")} 默认邮箱补全 SMTP 后才能真实发信`;
+  const defaultMailbox = senderMailboxes.find((item) => item.isDefault)
+    || senderMailboxes.find((item) => item.email.toLowerCase() === (user.outboundEmail || "").toLowerCase());
+  if (defaultMailboxEl) {
+    defaultMailboxEl.innerHTML = defaultMailbox
+      ? `${badge("默认", "green")} ${escapeHtml(defaultMailbox.label || defaultMailbox.email)} <small>${escapeHtml(defaultMailbox.email)} · ${escapeHtml(defaultMailbox.smtpHost)}:${defaultMailbox.smtpPort} · ${escapeHtml(defaultMailbox.imapHost || "IMAP 自动推导")}</small>`
+      : user.outboundEmail
+        ? `${badge("默认", "green")} ${escapeHtml(user.outboundEmail)} <small>该地址不在下方账号列表中——把它登记进来才能集中管理收信</small>`
+        : `尚未设置默认邮箱——先在下方添加邮箱，再设为默认`;
   }
   updateProfileSmtpHints(user);
   renderEmailConfigurationReminders();
   void loadCompanyProfile();
   void loadSenderMailboxes();
   void loadEmailTrackingConfig();
+  void loadBounceGuardConfig();
 }
 
 // ---------------------------------------------------------------------------
 // 发件邮箱池：登记多个 SMTP 发件邮箱，自动发信方案按「每 N 封」轮换使用
 // ---------------------------------------------------------------------------
 
-interface SenderMailboxView {
+export interface SenderMailboxView {
   id: string;
   label: string;
   email: string;
@@ -109,6 +91,10 @@ interface SenderMailboxView {
   dkimSelector?: string;
   hasDkimPrivateKey?: boolean;
   dailyLimit?: number;
+  /** 是否账号默认发件身份（后端按 email == users.outbound_email 判定） */
+  isDefault?: boolean;
+  syncEnabled?: boolean;
+  syncIntervalMinutes?: number;
 }
 
 // ── 已读追踪配置（个人设置 → 已读追踪）─────────────────────────────
@@ -155,13 +141,85 @@ export async function saveEmailTrackingConfig(button?: HTMLButtonElement | null)
   }
 }
 
+// ── 退信保护（邮箱设置 → 退信保护）─────────────────────────────────────
+interface BounceGuardView {
+  config: { enabled: boolean; maxBouncePercent: number; windowDays: number; minSample: number; source: string };
+  stats: { sent: number; bounced: number; percent: number; triggered: boolean };
+}
+
+function renderBounceGuard(view: BounceGuardView) {
+  const { config, stats } = view;
+  const enabled = qs<HTMLInputElement>("#bounceGuardEnabled");
+  if (enabled) enabled.checked = config.enabled;
+  setFieldValue("#bounceGuardPercent", String(config.maxBouncePercent));
+  setFieldValue("#bounceGuardWindow", String(config.windowDays));
+  setFieldValue("#bounceGuardMinSample", String(config.minSample));
+  const box = qs<HTMLElement>("#bounceGuardStatus");
+  if (!box) return;
+  const figures = `近 ${config.windowDays} 天发出 <b>${stats.sent}</b> 封，退信 <b>${stats.bounced}</b> 封，退信率 <b>${stats.percent}%</b>`;
+  const state = !config.enabled
+    ? badge("已关闭", "gray")
+    : stats.triggered
+      ? badge("已触发 · 外发暂停中", "amber")
+      : stats.sent < config.minSample
+        ? badge(`样本不足 ${config.minSample} 封 · 不判定`, "green")
+        : badge("正常", "green");
+  box.innerHTML = `${state} <small>${figures}</small>`;
+}
+
+export async function loadBounceGuardConfig() {
+  const box = qs<HTMLElement>("#bounceGuardStatus");
+  if (!box) return;
+  try {
+    renderBounceGuard(await api<BounceGuardView>("/api/email-delivery/bounce-guard"));
+  } catch (error) {
+    box.innerHTML = `${badge("读取失败", "amber")} <small>${escapeHtml(error instanceof Error ? error.message : "未知错误")}</small>`;
+  }
+}
+
+export async function saveBounceGuardConfig(button?: HTMLButtonElement | null) {
+  const enabled = qs<HTMLInputElement>("#bounceGuardEnabled")?.checked ?? true;
+  const maxBouncePercent = Math.round(Number(qs<HTMLInputElement>("#bounceGuardPercent")?.value || 10));
+  const windowDays = Math.round(Number(qs<HTMLInputElement>("#bounceGuardWindow")?.value || 7));
+  const minSample = Math.round(Number(qs<HTMLInputElement>("#bounceGuardMinSample")?.value || 20));
+  if (!(maxBouncePercent >= 1 && maxBouncePercent <= 100)) { toast("退信率阈值需在 1–100 之间", "error"); return; }
+  if (!(windowDays >= 1 && windowDays <= 90)) { toast("统计窗口需在 1–90 天之间", "error"); return; }
+  if (!(minSample >= 1 && minSample <= 10000)) { toast("最小样本需在 1–10000 之间", "error"); return; }
+  if (!enabled && !await confirmAction({
+    title: "关闭退信保护？",
+    message: "关闭后即使退信率很高，系统也会继续外发。",
+    consequences: ["高退信率会被邮箱服务商限流甚至封停发信", "发信域名信誉受损后恢复很慢", "建议排查完退信原因后尽快重新开启"],
+    confirmLabel: "确认关闭",
+    tone: "warning"
+  })) return;
+  setButtonPending(button ?? null, true, "保存", "保存中");
+  try {
+    const view = await api<BounceGuardView>("/api/email-delivery/bounce-guard", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, maxBouncePercent, windowDays, minSample })
+    });
+    renderBounceGuard(view);
+    toast(enabled ? "退信保护已保存，立即生效" : "退信保护已关闭", "success");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存退信保护失败", "error");
+  } finally {
+    setButtonPending(button ?? null, false, "保存", "保存中");
+  }
+}
+
 let senderMailboxes: SenderMailboxView[] = [];
 
 export async function loadSenderMailboxes() {
   const list = qs<HTMLElement>("#mailboxPoolList");
   if (!list) return;
   try {
-    const result = await api<{ mailboxes: SenderMailboxView[] }>("/api/sender-mailboxes");
+    let result = await api<{ mailboxes: SenderMailboxView[] }>("/api/sender-mailboxes");
+    // 迁移期兜底：旧版「默认发件邮箱」还存在 users.* 里、池为空时，
+    // 邮件中心账号接口会把它自动导入成一个账号——先拉一次触发导入再重读列表。
+    if (!result.mailboxes?.length && state.user?.smtpHost) {
+      await api("/api/mail-center/accounts").catch(() => undefined);
+      result = await api<{ mailboxes: SenderMailboxView[] }>("/api/sender-mailboxes");
+    }
     senderMailboxes = result.mailboxes || [];
   } catch (error) {
     senderMailboxes = [];
@@ -175,14 +233,15 @@ function renderSenderMailboxList() {
   const list = qs<HTMLElement>("#mailboxPoolList");
   if (!list) return;
   if (!senderMailboxes.length) {
-    list.innerHTML = `<div class="mailbox-pool-empty">还没有登记发件邮箱。主发件邮箱始终可用；登记 2 个以上并启用后，方案即可按「每 N 封」轮换发送。</div>`;
+    list.innerHTML = `<div class="mailbox-pool-empty">还没有邮箱账号。点「＋ 添加邮箱」登记 SMTP/IMAP 后，写信、自动发信与收件同步都用这里的账号。</div>`;
     return;
   }
   list.innerHTML = senderMailboxes.map((mailbox, index) => {
     const status = !mailbox.enabled ? `<span class="badge gray">已停用</span>`
       : mailbox.hasSmtpPassword ? `<span class="badge green">可用</span>`
       : `<span class="badge amber">缺授权码</span>`;
-    const primary = mailbox.email === (state.user?.outboundEmail || "") ? `<span class="badge" style="background:#eef4fc;border-color:#d5e3f6;color:#1f5fa8">同主邮箱</span>` : "";
+    const isDefault = mailbox.isDefault ?? (mailbox.email.toLowerCase() === (state.user?.outboundEmail || "").toLowerCase());
+    const primary = isDefault ? `<span class="badge green">默认</span>` : "";
     const dkim = mailbox.dkimDomain && mailbox.dkimSelector ? `<span class="badge" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d">DKIM ${escapeHtml(mailbox.dkimSelector)}.${escapeHtml(mailbox.dkimDomain)}</span>` : "";
     const signature = mailbox.signature?.trim()
       ? `<span class="badge" style="background:#eef4fc;border-color:#d5e3f6;color:#1f5fa8" title="${escapeHtml(mailbox.signature)}">专属尾缀</span>`
@@ -196,12 +255,14 @@ function renderSenderMailboxList() {
       </div>
       <div class="mailbox-pool-side">${status}</div>
       <div class="mailbox-pool-actions">
+        ${isDefault ? "" : `<button class="btn tiny" data-mailbox-default="${escapeHtml(mailbox.id)}" ${mailbox.enabled ? "" : "disabled title=\"已停用，先启用\""}>设为默认</button>`}
         <button class="btn tiny" data-mailbox-test="${escapeHtml(mailbox.id)}" ${mailbox.hasSmtpPassword ? "" : "disabled title=\"缺授权码，先编辑补全\""}>测试</button>
         <button class="btn tiny" data-mailbox-edit="${escapeHtml(mailbox.id)}">编辑</button>
         <button class="btn tiny danger subtle" data-mailbox-remove="${escapeHtml(mailbox.id)}">删除</button>
       </div>
     </div>`;
   }).join("");
+  qsa<HTMLButtonElement>("[data-mailbox-default]", list).forEach((button) => button.addEventListener("click", () => void setMailboxDefault(button.dataset.mailboxDefault || "", button)));
   qsa<HTMLButtonElement>("[data-mailbox-test]", list).forEach((button) => button.addEventListener("click", () => void testSenderMailbox(button.dataset.mailboxTest || "", button)));
   qsa<HTMLButtonElement>("[data-mailbox-edit]", list).forEach((button) => button.addEventListener("click", () => {
     const mailbox = senderMailboxes.find((row) => row.id === button.dataset.mailboxEdit);
@@ -210,12 +271,30 @@ function renderSenderMailboxList() {
   qsa<HTMLButtonElement>("[data-mailbox-remove]", list).forEach((button) => button.addEventListener("click", () => void removeSenderMailbox(button.dataset.mailboxRemove || "")));
 }
 
-export function openSenderMailboxModal(mailbox?: SenderMailboxView) {
-  const title = mailbox ? "编辑发件邮箱" : "登记发件邮箱";
+/** 设为默认：后端把该邮箱的 SMTP/IMAP/DKIM/发件人同步回账号级发件配置 */
+export async function setMailboxDefault(id: string, button?: HTMLButtonElement) {
+  const mailbox = senderMailboxes.find((row) => row.id === id);
+  if (!mailbox) return;
+  if (button) setButtonPending(button, true, "设为默认", "设置中");
+  try {
+    const { user } = await api<{ user: User }>(`/api/sender-mailboxes/${encodeURIComponent(id)}/make-default`, { method: "POST", body: "{}" });
+    updateStoredUser(user);
+    toast(`默认发件身份已切换为 ${mailbox.email}`, "success");
+    renderProfile();
+    await loadSenderMailboxes();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "设为默认失败", "error");
+  } finally {
+    if (button) setButtonPending(button, false, "设为默认", "设置中");
+  }
+}
+
+export function openSenderMailboxModal(mailbox?: SenderMailboxView, opts?: { onSaved?: (mailboxId: string, isNew: boolean) => void | Promise<void> }) {
+  const title = mailbox ? "编辑邮箱账号" : "添加邮箱账号";
   const body = `
     <div class="form-grid">
-      <div class="form-field"><label>备注名称</label><input id="smbLabel" placeholder="例如 腾讯企业邮 2 号" value="${escapeHtml(mailbox?.label || "")}"></div>
-      <div class="form-field"><label>发件邮箱 *</label><input id="smbEmail" placeholder="sales2@your-company.com" value="${escapeHtml(mailbox?.email || "")}"></div>
+      <div class="form-field"><label>备注名称</label><input id="smbLabel" placeholder="例如 主邮箱 / 询盘专用" value="${escapeHtml(mailbox?.label || "")}"></div>
+      <div class="form-field"><label>发件邮箱 *</label><input id="smbEmail" placeholder="sales@your-company.com" value="${escapeHtml(mailbox?.email || "")}"></div>
       <div class="form-field"><label>发件人显示名</label><input id="smbFromName" placeholder="留空 = 沿用账号发件人名称" value="${escapeHtml(mailbox?.fromName || "")}"></div>
       <div class="form-field full"><label>署名尾缀（这个邮箱专属）</label><textarea id="smbSignature" rows="4" placeholder="留空 = 沿用「邮箱设置 → 邮件签名」的账号级签名&#10;Best regards,&#10;Kevin&#10;ZHUHAI LONGTEC CO.,LTD">${escapeHtml(mailbox?.signature || "")}</textarea><small>写信、回复、转发时自动带在正文末尾；每个发件邮箱可以不一样，切换账号时尾缀跟着换。</small></div>
       <div class="form-field"><label>SMTP服务器 *</label><input id="smbSmtpHost" placeholder="smtp.exmail.qq.com" value="${escapeHtml(mailbox?.smtpHost || "")}"></div>
@@ -224,22 +303,88 @@ export function openSenderMailboxModal(mailbox?: SenderMailboxView) {
       <div class="form-field"><label>SMTP账号 *</label><input id="smbSmtpUser" placeholder="通常与发件邮箱一致" value="${escapeHtml(mailbox?.smtpUser || "")}"></div>
       <div class="form-field"><label>SMTP授权码 ${mailbox ? "（留空 = 保留原授权码）" : "*"}</label><input id="smbSmtpPassword" type="password" placeholder="${mailbox ? "输入后覆盖保存" : "授权码/客户端专用密码"}"></div>
       <div class="form-field"><label>IMAP服务器（可选）</label><input id="smbImapHost" placeholder="留空 = 按 SMTP 主机推导" value="${escapeHtml(mailbox?.imapHost || "")}"></div>
+      <div class="form-field"><label>IMAP端口</label><input id="smbImapPort" type="number" min="1" max="65535" value="${mailbox?.imapPort || 993}"></div>
       <div class="form-field"><label>IMAP账号（可选）</label><input id="smbImapUser" placeholder="留空 = 同 SMTP 账号" value="${escapeHtml(mailbox?.imapUser || "")}"></div>
       <div class="form-field"><label>IMAP授权码（可选）</label><input id="smbImapPassword" type="password" placeholder="留空 = 同 SMTP 授权码"></div>
+      <div class="form-field"><label>收件同步</label><select id="smbSyncEnabled"><option value="1"${mailbox?.syncEnabled !== false ? " selected" : ""}>开启（按频率自动收件）</option><option value="0"${mailbox?.syncEnabled === false ? " selected" : ""}>暂停</option></select></div>
+      <div class="form-field"><label>自动同步频率</label><select id="smbSyncInterval">
+        ${[15, 30, 60, 120, 240, 1440].map((minutes) => `<option value="${minutes}"${Number(mailbox?.syncIntervalMinutes || 60) === minutes ? " selected" : ""}>${minutes === 60 ? "每小时" : minutes === 1440 ? "每天" : minutes % 60 === 0 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`}</option>`).join("")}
+      </select></div>
       <div class="form-field"><label>DKIM 域名（可选）</label><input id="smbDkimDomain" placeholder="留空 = 不签名" value="${escapeHtml(mailbox?.dkimDomain || "")}"></div>
       <div class="form-field"><label>DKIM Selector（可选）</label><input id="smbDkimSelector" placeholder="例如 s1" value="${escapeHtml(mailbox?.dkimSelector || "")}"></div>
       <div class="form-field full"><label>DKIM 私钥 ${mailbox ? "（留空 = 保留原私钥）" : "（可选）"}</label><textarea id="smbDkimPrivateKey" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea><small>DNS 侧需同步添加 &lt;selector&gt;._domainkey 的 TXT 公钥记录；配置后该邮箱发出的开发信自动带 DKIM 签名。</small></div>
       <div class="form-field"><label>单账号日限额</label><input id="smbDailyLimit" type="number" min="1" max="500" value="${mailbox?.dailyLimit || 50}"><small>轮换时该邮箱当日发到上限即自动跳过，防止单箱过量被封；全部邮箱到限则整批暂停。</small></div>
       <label class="form-field" style="display:flex;gap:8px;align-items:center"><input id="smbEnabled" type="checkbox"${!mailbox || mailbox.enabled ? " checked" : ""}>启用（参与轮换）</label>
+      <div class="form-field full"><div class="mc-probe" id="smbProbe" hidden></div></div>
     </div>`;
-  const foot = `<button class="btn" data-modal-close>取消</button><button class="btn primary" id="smbSaveButton">${mailbox ? "保存修改" : "登记"}</button>`;
+  const foot = `<button class="btn" id="smbTestConn" type="button">测试连接</button><span class="modal-foot-spacer"></span><button class="btn" data-modal-close>取消</button><button class="btn primary" id="smbSaveButton">${mailbox ? "保存修改" : "添加"}</button>`;
   openModal(title, body, foot, { closeOnBackdrop: false });
   qs<HTMLElement>("#appModal .modal")?.classList.add("sender-mailbox-modal");
   qsa("[data-modal-close]").forEach((node) => node.addEventListener("click", closeModal));
-  qs<HTMLButtonElement>("#smbSaveButton")?.addEventListener("click", (event) => void saveSenderMailboxModal(event.currentTarget as HTMLButtonElement, mailbox?.id));
+  qs<HTMLButtonElement>("#smbSaveButton")?.addEventListener("click", (event) => void saveSenderMailboxModal(event.currentTarget as HTMLButtonElement, mailbox?.id, opts?.onSaved));
+  qs<HTMLButtonElement>("#smbTestConn")?.addEventListener("click", (event) => void testSenderMailboxConnection(event.currentTarget as HTMLButtonElement, mailbox?.id));
 }
 
-async function saveSenderMailboxModal(button?: HTMLButtonElement, id?: string) {
+interface MailboxProbeSide {
+  ok: boolean;
+  host: string;
+  port: number;
+  message: string;
+  ms?: number;
+}
+
+/** 「测试连接」：拿表单当前值直接探一次，不用先保存。SMTP 走 verify、IMAP 只读打开收件箱 */
+async function testSenderMailboxConnection(button?: HTMLButtonElement, mailboxId?: string) {
+  const email = qs<HTMLInputElement>("#smbEmail")?.value.trim() || "";
+  const password = qs<HTMLInputElement>("#smbSmtpPassword")?.value || "";
+  const smtpHost = qs<HTMLInputElement>("#smbSmtpHost")?.value.trim() || "";
+  const smtpPort = Number(qs<HTMLInputElement>("#smbSmtpPort")?.value || 465);
+  const imapHost = qs<HTMLInputElement>("#smbImapHost")?.value.trim() || "";
+  if (!email || !email.includes("@")) { toast("请先填写邮箱地址", "error"); return; }
+  if (!password && !mailboxId) { toast("请先填写 SMTP 授权码，测试连接需要它", "error"); return; }
+  const out = qs<HTMLElement>("#smbProbe");
+  if (button?.disabled) return;
+  if (out) {
+    out.hidden = false;
+    out.className = "mc-probe is-running";
+    out.innerHTML = `<b>正在连 SMTP 与 IMAP…</b><span>两个通道一起探，最多等 20 秒</span>`;
+  }
+  setButtonPending(button ?? null, true, "测试连接", "测试中…");
+  try {
+    const result = await api<{ ok: boolean; email: string; smtp: MailboxProbeSide; imap: MailboxProbeSide }>(
+      "/api/mail-center/test-connection",
+      { method: "POST", body: JSON.stringify({ mailboxId: mailboxId || "", email, password, smtpHost, smtpPort, imapHost }) }
+    );
+    const line = (label: string, side: MailboxProbeSide | undefined) => {
+      if (!side) return "";
+      const ok = Boolean(side.ok);
+      const where = `${side.host || "—"}${side.port ? `:${side.port}` : ""}`;
+      return `<div class="mc-probe-line ${ok ? "is-ok" : "is-bad"}">
+        <b>${label}</b>
+        <span class="mc-probe-state">${ok ? "通过" : "失败"}</span>
+        <span class="mc-probe-msg">${escapeHtml(side.message || "")}</span>
+        <i>${escapeHtml(where)}${side.ms ? ` · ${(side.ms / 1000).toFixed(1)}s` : ""}</i>
+      </div>`;
+    };
+    if (out) {
+      out.className = `mc-probe ${result.ok ? "is-ok" : "is-bad"}`;
+      out.innerHTML = `${line("SMTP 发信", result.smtp)}${line("IMAP 收信", result.imap)}`;
+    }
+    toast(result.ok ? "两个通道都连通了，可以保存" : "有通道没通，按下面提示改完再测", result.ok ? "success" : "error");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "测试失败";
+    if (out) {
+      out.hidden = false;
+      out.className = "mc-probe is-bad";
+      out.innerHTML = `<div class="mc-probe-line is-bad"><b>配置</b><span class="mc-probe-state">失败</span><span class="mc-probe-msg">${escapeHtml(message)}</span></div>`;
+    }
+    toast(message, "error");
+  } finally {
+    setButtonPending(button ?? null, false, "测试连接", "测试连接");
+  }
+}
+
+async function saveSenderMailboxModal(button?: HTMLButtonElement, id?: string, onSaved?: (mailboxId: string, isNew: boolean) => void | Promise<void>) {
   const payload = {
     label: qs<HTMLInputElement>("#smbLabel")?.value.trim() || "",
     email: qs<HTMLInputElement>("#smbEmail")?.value.trim() || "",
@@ -251,6 +396,7 @@ async function saveSenderMailboxModal(button?: HTMLButtonElement, id?: string) {
     smtpUser: qs<HTMLInputElement>("#smbSmtpUser")?.value.trim() || "",
     smtpPassword: qs<HTMLInputElement>("#smbSmtpPassword")?.value || "",
     imapHost: qs<HTMLInputElement>("#smbImapHost")?.value.trim() || "",
+    imapPort: Number(qs<HTMLInputElement>("#smbImapPort")?.value || 993),
     imapUser: qs<HTMLInputElement>("#smbImapUser")?.value.trim() || "",
     imapPassword: qs<HTMLInputElement>("#smbImapPassword")?.value || "",
     dkimDomain: qs<HTMLInputElement>("#smbDkimDomain")?.value.trim() || "",
@@ -266,21 +412,33 @@ async function saveSenderMailboxModal(button?: HTMLButtonElement, id?: string) {
   }
   if (button) {
     button.disabled = true;
-    button.textContent = id ? "保存中" : "登记中";
+    button.textContent = id ? "保存中" : "添加中";
   }
   try {
-    await api(id ? `/api/sender-mailboxes/${encodeURIComponent(id)}` : "/api/sender-mailboxes", {
+    const created = await api<{ mailbox?: { id: string } }>(id ? `/api/sender-mailboxes/${encodeURIComponent(id)}` : "/api/sender-mailboxes", {
       method: id ? "PUT" : "POST",
       body: JSON.stringify(payload)
     });
+    // 收件同步开关与频率走邮件中心的账号级接口（同一行数据，只是另一个写路径）
+    const mailboxId = id || created.mailbox?.id || "";
+    if (mailboxId) {
+      await api(`/api/mail-center/accounts/${encodeURIComponent(mailboxId)}/sync`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          syncEnabled: qs<HTMLSelectElement>("#smbSyncEnabled")?.value !== "0",
+          syncIntervalMinutes: Number(qs<HTMLSelectElement>("#smbSyncInterval")?.value || 60)
+        })
+      }).catch(() => undefined);
+    }
     closeModal();
-    toast(id ? "发件邮箱已更新" : "发件邮箱已登记", "success");
+    toast(id ? "邮箱账号已更新" : "邮箱已添加", "success");
     await loadSenderMailboxes();
+    await onSaved?.(mailboxId, !id);
   } catch (error) {
     toast(error instanceof Error ? error.message : "保存失败", "error");
     if (button) {
       button.disabled = false;
-      button.textContent = id ? "保存修改" : "登记";
+      button.textContent = id ? "保存修改" : "添加";
     }
   }
 }
@@ -357,27 +515,31 @@ export function updateStoredUser(user: User) {
 }
 
 export async function saveProfileEmailBinding(button?: HTMLButtonElement, clearSmtpPassword = false, clearImapPassword = false) {
-  const outboundEmail = qs<HTMLInputElement>("#profileOutboundEmail")?.value.trim() || "";
-  const emailSenderName = qs<HTMLInputElement>("#profileSenderName")?.value.trim() || "";
-  const emailSignature = qs<HTMLTextAreaElement>("#profileEmailSignature")?.value.trim() || "";
-  const smtpHost = qs<HTMLInputElement>("#profileSmtpHost")?.value.trim() || "";
-  const smtpPort = Number(qs<HTMLInputElement>("#profileSmtpPort")?.value || 465);
-  const smtpSecure = qs<HTMLSelectElement>("#profileSmtpSecure")?.value !== "false";
-  const smtpUser = qs<HTMLInputElement>("#profileSmtpUser")?.value.trim() || "";
+  // 邮箱账号配置统一改走「邮箱账号列表 / make-default」，这里保留的 PATCH
+  // 只改账号级字段（签名）；页面已移除的输入框一律回退 state.user，防误清空。
+  const current = state.user;
+  const readInput = (selector: string, fallback: string) => qs<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(selector)?.value.trim() ?? fallback;
+  const outboundEmail = clearSmtpPassword ? "" : readInput("#profileOutboundEmail", current?.outboundEmail || "");
+  const emailSenderName = clearSmtpPassword ? "" : readInput("#profileSenderName", current?.emailSenderName || "");
+  const emailSignature = clearSmtpPassword ? "" : readInput("#profileEmailSignature", current?.emailSignature || "");
+  const smtpHost = clearSmtpPassword ? "" : readInput("#profileSmtpHost", current?.smtpHost || "");
+  const smtpPort = clearSmtpPassword ? 465 : Number(qs<HTMLInputElement>("#profileSmtpPort")?.value || current?.smtpPort || 465);
+  const smtpSecure = clearSmtpPassword ? true : qs<HTMLSelectElement>("#profileSmtpSecure")?.value !== "false";
+  const smtpUser = clearSmtpPassword ? "" : readInput("#profileSmtpUser", current?.smtpUser || "");
   const smtpPassword = qs<HTMLInputElement>("#profileSmtpPassword")?.value || "";
-  const inboundSyncEnabled = qs<HTMLInputElement>("#profileImapEnabled")?.checked || false;
-  const imapHost = qs<HTMLInputElement>("#profileImapHost")?.value.trim() || "";
-  const imapPort = Number(qs<HTMLInputElement>("#profileImapPort")?.value || 993);
-  const imapSecure = qs<HTMLSelectElement>("#profileImapSecure")?.value !== "false";
-  const imapUser = qs<HTMLInputElement>("#profileImapUser")?.value.trim() || "";
+  const inboundSyncEnabled = qs<HTMLInputElement>("#profileImapEnabled")?.checked ?? Boolean(current?.inboundSyncEnabled);
+  const imapHost = clearSmtpPassword ? "" : readInput("#profileImapHost", current?.imapHost || "");
+  const imapPort = clearSmtpPassword ? 993 : Number(qs<HTMLInputElement>("#profileImapPort")?.value || current?.imapPort || 993);
+  const imapSecure = clearSmtpPassword ? true : qs<HTMLSelectElement>("#profileImapSecure")?.value !== "false";
+  const imapUser = clearSmtpPassword ? "" : readInput("#profileImapUser", current?.imapUser || "");
   const imapPassword = qs<HTMLInputElement>("#profileImapPassword")?.value || "";
-  const dkimDomain = clearSmtpPassword ? "" : qs<HTMLInputElement>("#profileDkimDomain")?.value.trim() || "";
-  const dkimSelector = clearSmtpPassword ? "" : qs<HTMLInputElement>("#profileDkimSelector")?.value.trim() || "";
+  const dkimDomain = clearSmtpPassword ? "" : readInput("#profileDkimDomain", current?.dkimDomain || "");
+  const dkimSelector = clearSmtpPassword ? "" : readInput("#profileDkimSelector", current?.dkimSelector || "");
   const dkimPrivateKey = clearSmtpPassword ? "" : qs<HTMLTextAreaElement>("#profileDkimPrivateKey")?.value || "";
-  const idleText = clearSmtpPassword ? "清空邮箱绑定" : "保存个人资料";
+  const idleText = clearSmtpPassword ? "取消默认身份" : "保存";
   if (button) {
     button.disabled = true;
-    button.textContent = clearSmtpPassword ? "清空中" : "保存中";
+    button.textContent = clearSmtpPassword ? "处理中" : "保存中";
   }
   try {
     const result = await api<{ user: User }>("/api/profile/email-binding", {
@@ -386,9 +548,10 @@ export async function saveProfileEmailBinding(button?: HTMLButtonElement, clearS
     });
     updateStoredUser(result.user);
     if (clearImapPassword && !clearSmtpPassword) toast("IMAP 密码已清除");
-    else toast(outboundEmail ? "个人邮箱配置已保存" : "个人邮箱配置已清空");
+    else toast(outboundEmail ? "邮箱设置已保存" : "默认发件身份已取消");
+    renderProfile();
   } catch (error) {
-    toast(error instanceof Error ? error.message : "个人邮箱配置保存失败", "error");
+    toast(error instanceof Error ? error.message : "保存失败", "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -435,19 +598,11 @@ export async function changeProfilePassword(button?: HTMLButtonElement) {
 
 export async function clearProfileEmailBinding(button?: HTMLButtonElement) {
   if (!await confirmAction({
-    title: "清空发件邮箱绑定",
-    message: "将清除当前账号的发件邮箱配置。",
-    consequences: ["SMTP 主机、账号和授权码会被清空", "发件人名称与邮件签名会被清空", "重新配置前无法从 CRM 发信"],
-    confirmLabel: "清空绑定"
+    title: "取消默认发件身份",
+    message: "将清除账号级的默认发件配置；账号列表里的邮箱不受影响。",
+    consequences: ["开发信、回信匹配与测试邮件将没有默认身份可用", "账号级邮件签名会被清空", "再次「设为默认」即可恢复"],
+    confirmLabel: "取消默认"
   })) return;
-  setFieldValue("#profileOutboundEmail", "");
-  setFieldValue("#profileSenderName", "");
-  setFieldValue("#profileEmailSignature", "");
-  setFieldValue("#profileSmtpHost", "");
-  setFieldValue("#profileSmtpPort", "465");
-  setFieldValue("#profileSmtpUser", "");
-  setFieldValue("#profileSmtpPassword", "");
-  setFieldValue("#profileTestEmailTo", "");
   await saveProfileEmailBinding(button, true);
 }
 

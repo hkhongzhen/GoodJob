@@ -92,6 +92,8 @@ export interface MailAccountOverview {
   trashMessages: number;
   junkMessages: number;
   lastMessageAt: string;
+  /** 该邮箱是否账号默认发件身份（email == users.outbound_email） */
+  isDefault?: boolean;
 }
 
 export interface MailJourneyEvent {

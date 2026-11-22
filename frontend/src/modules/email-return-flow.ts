@@ -377,6 +377,8 @@ export interface MailCenterAccount {
   inboundMessages: number;
   matchedMessages: number;
   lastMessageAt: string;
+  /** 该邮箱是否账号默认发件身份 */
+  isDefault?: boolean;
 }
 
 export interface MailCenterMessage {

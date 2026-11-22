@@ -2087,11 +2087,13 @@ assert.match(
     /\.\.\.\(user\.dkimDomain && user\.dkimSelector && user\.dkimPrivateKey \? \{\s*dkim: \{/u,
     "发信没有注入 DKIM 选项：账号里配了域名/selector/私钥也不会真的签名"
   );
+  // DKIM 输入在邮箱账号弹窗里（profile.ts 模板），不在 index.html 静态页面上
+  const profileModuleSource = readFileSync(new URL("./modules/profile.ts", import.meta.url), "utf8");
   assert.ok(
-    prototype.includes('id="profileDkimDomain"')
-      && prototype.includes('id="profileDkimSelector"')
-      && prototype.includes('id="profileDkimPrivateKey"'),
-    "个人资料页缺 DKIM 三个输入：用户没地方配域名/selector/私钥"
+    profileModuleSource.includes('id="smbDkimDomain"')
+      && profileModuleSource.includes('id="smbDkimSelector"')
+      && profileModuleSource.includes('id="smbDkimPrivateKey"'),
+    "邮箱账号弹窗缺 DKIM 三个输入：用户没地方配域名/selector/私钥"
   );
   assert.ok(
     authSource.includes("hasDkimPrivateKey: Boolean(user.dkimPrivateKey)"),

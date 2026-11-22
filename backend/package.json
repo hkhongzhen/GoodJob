@@ -119,7 +119,8 @@
     "test:trade-document-defaults": "node ../scripts/run-with-env.mjs NODE_ENV=test JWT_SECRET=goodjob-document-defaults-test-secret-at-least-32-characters tsx src/trade-document-defaults-workflow-test.ts",
     "test:quote-history": "node ../scripts/run-with-env.mjs NODE_ENV=test JWT_SECRET=goodjob-quote-history-test-secret-at-least-32-characters tsx src/quote-history-workflow-test.ts",
     "test:files": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/file-storage-test.ts && node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/file-derive-test.ts && node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/file-bundle-test.ts && node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/file-share-test.ts",
-    "test:store-read-path": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/mysql-store-read-path-test.ts"
+    "test:store-read-path": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/mysql-store-read-path-test.ts",
+    "test:bounce-guard": "node ../scripts/run-with-env.mjs NODE_ENV=test tsx src/outbound-bounce-guard-test.ts"
   },
   "dependencies": {
     "@goodjob/integration-connector-sdk": "0.1.0",

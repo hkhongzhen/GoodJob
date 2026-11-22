@@ -13,9 +13,10 @@ import {
   MC_FOLDERS, MC_REPLY_CLASSIFICATION, MC_SOURCE_LABEL, type MailAssistAction, type MailCenterAccount,
   type MailCenterCustomerDetail, type MailCenterCustomerItem, type MailCenterJourney, type MailCenterJourneyEndpoint,
   type MailCenterJourneyEvent, type MailCenterMessage, type MailCenterTab, type MailCenterTool,
-  type MailCenterToolSection, mailCenterState, mcAvatar, mcDateTime, mcEmpty, mcGuessSmtpHost, mcIcon, mcRelativeTime,
+  type MailCenterToolSection, mailCenterState, mcAvatar, mcDateTime, mcEmpty, mcIcon, mcRelativeTime,
   mcSyncIntervalLabel, mcSyncTone
 } from "./email-return-flow";
+import { openSenderMailboxModal, type SenderMailboxView } from "./profile";
 
 // ── 渲染 ────────────────────────────────────────────────────────────────────
 
@@ -182,7 +183,7 @@ function renderMailCenterAccounts() {
           <i class="mc-account-dot ${tone.cls}"></i>
         </span>
         <div class="mc-account-name">
-          <b>${escapeHtml(account.label || account.email)}</b>
+          <b>${escapeHtml(account.label || account.email)}${account.isDefault ? ` <span class="mc-acc-default">默认</span>` : ""}</b>
           <span>${escapeHtml(account.email)}</span>
         </div>
         <button class="mc-acc-edit" type="button" data-mc-account-action="edit" data-mc-account="${escapeHtml(account.id)}" title="编辑账号" aria-label="编辑账号">
@@ -3540,223 +3541,39 @@ async function sendMailCenterCompose() {
     toast(/请求内容过大|entity\.too\.large|413/i.test(message)
       ? "图片或附件太大，服务器拒收：把图片压缩后再发，或改用网盘链接"
       : (message || "发送失败，请检查发件账号配置"), "error");
-    mailCenterState.composeSending = false;
     sendBtn.disabled = false;
     sendBtn.classList.remove("is-sending");
     if (sendLabel) sendLabel.textContent = "发送";
+  } finally {
+    // 成功分支也必须复位：否则同一页面发过一封后，后续写信/回复点「发送」都会静默无反应
+    mailCenterState.composeSending = false;
   }
-}
-
-function openMailCenterAccountModal(account?: MailCenterAccount) {
-  const editing = Boolean(account);
-  const passwordHint = editing ? "留空 = 保留原授权码" : "企业邮箱的客户端授权码 / 应用专用密码";
-  openModal(editing ? "编辑邮箱账号" : "绑定邮箱账号", `
-    <div class="form-grid">
-      <div class="form-field">
-        <label>账号名称</label>
-        <input id="mcAccountLabel" maxlength="60" value="${escapeHtml(account?.label || "")}" placeholder="例如 主邮箱 / 询盘专用">
-      </div>
-      <div class="form-field">
-        <label>邮箱地址</label>
-        <input id="mcAccountEmail" type="email" value="${escapeHtml(account?.email || "")}" placeholder="sales@yourcompany.com">
-      </div>
-      <div class="form-field">
-        <label>SMTP 授权码</label>
-        <input id="mcAccountPassword" type="password" autocomplete="new-password" placeholder="${escapeHtml(passwordHint)}">
-      </div>
-      <div class="form-field">
-        <label>SMTP 主机</label>
-        <input id="mcAccountSmtpHost" value="${escapeHtml(account?.smtpHost || "")}" placeholder="smtp.exmail.qq.com">
-      </div>
-      <div class="form-field">
-        <label>SMTP 端口</label>
-        <input id="mcAccountSmtpPort" type="number" value="${account?.smtpPort || 465}" min="1" max="65535">
-      </div>
-      <div class="form-field">
-        <label>IMAP 主机（可留空自动推导）</label>
-        <input id="mcAccountImapHost" value="${escapeHtml(account?.imapHost || "")}" placeholder="imap.exmail.qq.com">
-      </div>
-      <div class="form-field">
-        <label>自动同步频率</label>
-        <select id="mcAccountInterval">
-          <option value="15">每 15 分钟</option>
-          <option value="30">每 30 分钟</option>
-          <option value="60" selected>每小时</option>
-          <option value="120">每 2 小时</option>
-          <option value="240">每 4 小时</option>
-          <option value="1440">每天</option>
-        </select>
-      </div>
-      <div class="form-field">
-        <label>收件同步</label>
-        <select id="mcAccountSyncEnabled">
-          <option value="1" selected>开启（按频率自动收件）</option>
-          <option value="0">暂停</option>
-        </select>
-      </div>
-      <div class="form-field full">
-        <div class="mc-form-note">授权码只在本机加密保存，用于 SMTP 发信与 IMAP 收件；不会上传到任何第三方。IMAP 主机留空时会按 SMTP 主机推导（如 smtp.exmail.qq.com → imap.exmail.qq.com）。</div>
-      </div>
-      <div class="form-field full">
-        <div class="mc-probe" id="mcAccountProbe" hidden></div>
-      </div>
-    </div>`, `<button class="btn" id="mcAccountTest" type="button">测试连接</button><span class="modal-foot-spacer"></span><button class="btn" data-modal-close>取消</button><button class="btn primary" id="mcAccountSave">${editing ? "保存修改" : "绑定并同步"}</button>`);
-  qs("#appModal .modal")?.classList.add("mail-center-account-modal");
-  qsa<HTMLElement>("[data-modal-close]", qs("#appModal") || document).forEach((node) => {
-    node.addEventListener("click", closeModal);
-  });
-  const interval = qs<HTMLSelectElement>("#mcAccountInterval");
-  if (interval && account) interval.value = String(account.syncIntervalMinutes || 60);
-  const syncEnabled = qs<HTMLSelectElement>("#mcAccountSyncEnabled");
-  if (syncEnabled && account) syncEnabled.value = account.syncEnabled ? "1" : "0";
-  const hostInput = qs<HTMLInputElement>("#mcAccountSmtpHost");
-  const emailInput = qs<HTMLInputElement>("#mcAccountEmail");
-  emailInput?.addEventListener("blur", () => {
-    if (!hostInput || hostInput.value.trim()) return;
-    if (!emailInput.value.includes("@")) return;
-    hostInput.value = mcGuessSmtpHost(emailInput.value.trim());
-  });
-  qs("#mcAccountSave")?.addEventListener("click", () => void saveMailCenterAccount(account));
-  qs("#mcAccountTest")?.addEventListener("click", () => void testMailCenterAccountConnection(account));
-}
-
-interface MailProbeSide {
-  ok: boolean;
-  host: string;
-  port: number;
-  message: string;
-  ms?: number;
-  letters?: number;
-  folders?: number;
 }
 
 /**
- * 弹窗里的「测试连接」：拿表单当前值直接探一次，不用先保存。
- * SMTP 走 verify（不发信）、IMAP 只读打开收件箱 —— 两个通道分开报，才知道该改哪一格。
+ * 统一入口：与「邮箱设置」共用同一个账号弹窗（profile.ts 的 openSenderMailboxModal）。
+ * 邮件中心侧只负责取完整账号视图、保存后刷新卡片；新账号保存成功后自动拉起一次同步。
  */
-async function testMailCenterAccountConnection(account?: MailCenterAccount) {
-  const email = qs<HTMLInputElement>("#mcAccountEmail")?.value.trim() || "";
-  const password = qs<HTMLInputElement>("#mcAccountPassword")?.value || "";
-  const smtpHostRaw = qs<HTMLInputElement>("#mcAccountSmtpHost")?.value.trim() || "";
-  const smtpPort = Number(qs<HTMLInputElement>("#mcAccountSmtpPort")?.value || 465);
-  const imapHost = qs<HTMLInputElement>("#mcAccountImapHost")?.value.trim() || "";
-  if (!email || !email.includes("@")) { toast("请先填写邮箱地址", "error"); return; }
-  if (!password && !account) { toast("请先填写 SMTP 授权码，测试连接需要它", "error"); return; }
-  const smtpHost = smtpHostRaw || mcGuessSmtpHost(email);
-  if (!smtpHostRaw) {
-    const input = qs<HTMLInputElement>("#mcAccountSmtpHost");
-    if (input) input.value = smtpHost;
-  }
-  const out = qs<HTMLElement>("#mcAccountProbe");
-  const button = qs<HTMLButtonElement>("#mcAccountTest");
-  if (button?.disabled) return;
-  if (out) {
-    out.hidden = false;
-    out.className = "mc-probe is-running";
-    out.innerHTML = `<b>正在连 SMTP 与 IMAP…</b><span>两个通道一起探，最多等 20 秒</span>`;
-  }
-  setButtonPending(button, true, "测试连接", "测试中…");
+async function openMailCenterAccountModal(account?: MailCenterAccount) {
+  let mailbox: SenderMailboxView | undefined;
   try {
-    const result = await api<{ ok: boolean; email: string; smtp: MailProbeSide; imap: MailProbeSide }>(
-      "/api/mail-center/test-connection",
-      { method: "POST", body: JSON.stringify({
-        // 编辑态授权码留空 = 用库里那份，别逼用户重新输一遍
-        mailboxId: account?.id || "",
-        email, password,
-        smtpHost, smtpPort,
-        imapHost
-      }) }
-    );
-    const line = (label: string, side: MailProbeSide | undefined) => {
-      if (!side) return "";
-      const ok = Boolean(side.ok);
-      const where = `${side.host || "—"}${side.port ? `:${side.port}` : ""}`;
-      return `<div class="mc-probe-line ${ok ? "is-ok" : "is-bad"}">
-        <b>${label}</b>
-        <span class="mc-probe-state">${ok ? "通过" : "失败"}</span>
-        <span class="mc-probe-msg">${escapeHtml(side.message || "")}</span>
-        <i>${escapeHtml(where)}${side.ms ? ` · ${(side.ms / 1000).toFixed(1)}s` : ""}</i>
-      </div>`;
-    };
-    if (out) {
-      out.className = `mc-probe ${result.ok ? "is-ok" : "is-bad"}`;
-      out.innerHTML = `${line("SMTP 发信", result.smtp)}${line("IMAP 收信", result.imap)}`;
-    }
-    toast(
-      result.ok ? "两个通道都连通了，可以保存" : "有通道没通，按下面提示改完再测",
-      result.ok ? "success" : "error"
-    );
+    const { mailboxes } = await api<{ mailboxes: SenderMailboxView[] }>("/api/sender-mailboxes");
+    if (account) mailbox = mailboxes.find((item) => item.id === account.id);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "测试失败";
-    if (out) {
-      out.hidden = false;
-      out.className = "mc-probe is-bad";
-      out.innerHTML = `<div class="mc-probe-line is-bad"><b>配置</b><span class="mc-probe-state">失败</span><span class="mc-probe-msg">${escapeHtml(message)}</span></div>`;
-    }
-    toast(message, "error");
-  } finally {
-    setButtonPending(button, false, "测试连接", "测试连接");
+    toast(error instanceof Error ? error.message : "读取邮箱账号失败", "error");
+    return;
   }
-}
-
-async function saveMailCenterAccount(account?: MailCenterAccount) {
-  const label = qs<HTMLInputElement>("#mcAccountLabel")?.value.trim() || "";
-  const email = qs<HTMLInputElement>("#mcAccountEmail")?.value.trim() || "";
-  const password = qs<HTMLInputElement>("#mcAccountPassword")?.value || "";
-  const smtpHost = qs<HTMLInputElement>("#mcAccountSmtpHost")?.value.trim() || "";
-  const smtpPort = Number(qs<HTMLInputElement>("#mcAccountSmtpPort")?.value || 465);
-  const imapHost = qs<HTMLInputElement>("#mcAccountImapHost")?.value.trim() || "";
-  const interval = Number(qs<HTMLSelectElement>("#mcAccountInterval")?.value || 60);
-  const syncEnabled = (qs<HTMLSelectElement>("#mcAccountSyncEnabled")?.value || "1") === "1";
-  if (!email || !email.includes("@")) { toast("请填写有效的邮箱地址", "error"); return; }
-  if (!account && !password) { toast("请填写 SMTP 授权码", "error"); return; }
-  const host = smtpHost || mcGuessSmtpHost(email);
-  const button = qs<HTMLButtonElement>("#mcAccountSave");
-  if (button?.disabled) return;
-  if (button) setButtonPending(button, true, account ? "保存修改" : "绑定并同步", "提交中…");
-  try {
-    const payload: Record<string, unknown> = {
-      label: label || email,
-      email,
-      smtpHost: host,
-      smtpPort,
-      smtpSecure: smtpPort !== 587,
-      smtpUser: email,
-      enabled: true,
-      imapHost
-    };
-    if (password) payload.smtpPassword = password;
-    let mailboxId = account?.id || "";
-    if (account) {
-      await api(`/api/sender-mailboxes/${encodeURIComponent(account.id)}`, {
-        method: "PUT",
-        body: JSON.stringify(payload)
-      });
-    } else {
-      if (!password) throw new Error("请填写 SMTP 授权码");
-      const created = await api<{ mailbox: { id: string } }>("/api/sender-mailboxes", {
-        method: "POST",
-        body: JSON.stringify({ ...payload, smtpPassword: password })
-      });
-      mailboxId = created.mailbox?.id || "";
-    }
-    if (mailboxId) {
-      await api(`/api/mail-center/accounts/${encodeURIComponent(mailboxId)}/sync`, {
-        method: "PATCH",
-        body: JSON.stringify({ syncEnabled, syncIntervalMinutes: interval })
-      }).catch(() => undefined);
-    }
-    closeModal();
-    toast(account ? "邮箱已更新" : "邮箱已绑定，开始同步", "success");
-    await loadMailCenterAccounts();
-    renderMailCenterPage();
-    if (!account && mailboxId) {
-      void runMailCenterSync(mailboxId);
-    }
-  } catch (error) {
-    toast(error instanceof Error ? error.message : "保存失败", "error");
-    if (button) setButtonPending(button, false, account ? "保存修改" : "绑定并同步", account ? "保存修改" : "绑定并同步");
+  if (account && !mailbox) {
+    toast("账号数据读取失败", "error");
+    return;
   }
+  openSenderMailboxModal(mailbox, {
+    onSaved: async (mailboxId, isNew) => {
+      await loadMailCenterAccounts();
+      renderMailCenterPage();
+      if (isNew && mailboxId) void runMailCenterSync(mailboxId);
+    }
+  });
 }
 
 // ── 事件绑定（委托在静态容器上，重复调用安全）────────────────────────────────

@@ -100,7 +100,7 @@ import {
 } from "./modules/auth";
 import {
   changeProfilePassword, checkProfileEmailDomain, clearProfileEmailBinding, clearProfileImapPassword,
-  loadEmailTrackingConfig, loadSenderMailboxes, openSenderMailboxModal, renderProfile, saveEmailTrackingConfig,
+  loadBounceGuardConfig, loadEmailTrackingConfig, loadSenderMailboxes, openSenderMailboxModal, renderProfile, saveBounceGuardConfig, saveEmailTrackingConfig,
   saveProfileEmailBinding, sendProfileTestEmail, testProfileImap, updateStoredUser
 } from "./modules/profile";
 import { closeLeadDrawer, createLead, openLead, openLeadAssignModal, openLeadAssignmentsModal, reloadLeads, renderLeads } from "./modules/leads";
@@ -2823,12 +2823,11 @@ function installEvents() {
   qs<HTMLButtonElement>("#profileEntryButton")?.addEventListener("click", () => activateNavView("profile", () => renderProfile()));
   qs<HTMLButtonElement>("#profileSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileChangePasswordButton")?.addEventListener("click", (event) => void changeProfilePassword(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#profileClearImapButton")?.addEventListener("click", (event) => void clearProfileImapPassword(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#profileTestImapButton")?.addEventListener("click", (event) => void testProfileImap(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileDomainAuthButton")?.addEventListener("click", (event) => void checkProfileEmailDomain(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#companyProfileSaveButton")?.addEventListener("click", () => void saveCompanyProfile());
   qs<HTMLButtonElement>("#mailboxPoolAddButton")?.addEventListener("click", () => openSenderMailboxModal());
   qs<HTMLButtonElement>("#trackingSaveButton")?.addEventListener("click", (event) => void saveEmailTrackingConfig(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#bounceGuardSaveButton")?.addEventListener("click", (event) => void saveBounceGuardConfig(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#mysqlImportPicker")?.addEventListener("click", () => qs<HTMLInputElement>("#mysqlImportFile")?.click());
   qs<HTMLInputElement>("#mysqlImportFile")?.addEventListener("change", (event) => {
     const file = (event.currentTarget as HTMLInputElement).files?.[0];
@@ -2857,7 +2856,7 @@ function installEvents() {
   qs<HTMLButtonElement>("#databaseLogDownload")?.addEventListener("click", downloadDatabaseLog);
   qs<HTMLButtonElement>("#profileTestSmtpButton")?.addEventListener("click", (event) => void sendProfileTestEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#profileClearEmailButton")?.addEventListener("click", (event) => void clearProfileEmailBinding(event.currentTarget as HTMLButtonElement));
-  // 邮箱设置页的保存键跟个人页的「保存个人资料」是同一个动作（字段本来就是同一套）
+  // 邮箱设置页的保存键只改账号级字段（签名）；SMTP/IMAP 已统一走「邮箱账号」列表
   qs<HTMLButtonElement>("#mailSettingsSaveButton")?.addEventListener("click", (event) => void saveProfileEmailBinding(event.currentTarget as HTMLButtonElement));
   // 个人页只留入口：开发信发件配置提醒条 + 「发件身份」指标都能点进邮箱设置
   ["#profileDevelopmentEmailReady", "[data-goto-mail-settings]"].forEach((selector) => {
@@ -2872,8 +2871,7 @@ function installEvents() {
       }
     });
   });
-  qs<HTMLInputElement>("#profileSmtpPort")?.addEventListener("input", () => updateProfileSmtpHints());
-  qs<HTMLSelectElement>("#profileSmtpSecure")?.addEventListener("change", () => updateProfileSmtpHints());
+
   qs<HTMLButtonElement>("#profileRefreshButton")?.addEventListener("click", async () => {
     const result = await api<{ user: User }>("/api/profile");
     updateStoredUser(result.user);
@@ -4422,6 +4420,7 @@ export function activateNavView(view: string, after?: () => void) {
     renderProfile(state.user);
     void loadSenderMailboxes();
     void loadEmailTrackingConfig();
+    void loadBounceGuardConfig();
   }
   if (view === "sales-skill-center") {
     void loadSalesSkillCenter();
