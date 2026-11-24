@@ -58,6 +58,7 @@ import { ensureExchangeSchema, MysqlExchangeRepository, setExchangeRepository } 
 import { ensureKbTrainingSchema, MysqlKbTrainingRepository, setKbTrainingRepository } from "./kb-training/kb-training-repository.js";
 import { ensureOutreachJourneySchema, MysqlBackgroundResearchRepository, setBackgroundResearchRepository } from "./outreach-journey.js";
 import { ensureAppSettingsSchema, setAppSettingsPool } from "./app-settings.js";
+import { ensureEmailVerificationSchema, setEmailVerificationPool } from "./email-verifier.js";
 import { ensureAiEngineSchema, MysqlAiEngineJobRepository, setAiEngineJobRepository } from "./ai-engine-jobs.js";
 import { createMysqlSenderMailboxRepository, ensureSenderMailboxSchema, setSenderMailboxRepository } from "./sender-mailbox.js";
 import { createMysqlSupplierRepository, ensureSupplierSchema, setSupplierRepository } from "./supplier-repository.js";
@@ -676,9 +677,11 @@ export async function createMysqlStore(
   await ensureResourceHubSchema(pool);
   await ensureKnowledgeGovernanceSchema(pool);
   await ensureAppSettingsSchema(pool);
+  await ensureEmailVerificationSchema(pool);
   await ensureAiEngineSchema(pool);
   await ensureBuiltInSuperAdmin(pool);
   setAppSettingsPool(pool);
+  await setEmailVerificationPool(pool);
   setAiEngineJobRepository(new MysqlAiEngineJobRepository(pool));
   setIntegrationRepository(new MysqlIntegrationControlRepository(pool));
   setExchangeRepository(new MysqlExchangeRepository(pool));
@@ -1356,6 +1359,7 @@ export async function createMysqlStore(
     setKnowledgeGovernanceRepository(null);
     setAiEngineJobRepository(null);
     setAppSettingsPool(null);
+    await setEmailVerificationPool(null);
     await releaseProductionInstanceLock?.();
     await pool.end();
   });
@@ -2338,6 +2342,7 @@ export async function migrateMysqlSchema(input: {
     await ensureResourceHubSchema(pool);
     await ensureKnowledgeGovernanceSchema(pool);
     await ensureAppSettingsSchema(pool);
+    await ensureEmailVerificationSchema(pool);
     await ensureAiEngineSchema(pool);
     const prospectRunSnapshotRepair =
       await repairProspectRunExecutionSnapshotIntegrity(pool);

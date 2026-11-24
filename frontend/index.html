@@ -26796,6 +26796,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <label><input id="prospectSelectPage" type="checkbox">本页全选</label>
                 <span id="prospectSelectedCount">已选 0 条</span>
                 <button class="btn" id="prospectEnrichContactsButton" data-permission="prospect.execute">批量查联系方式</button>
+                <button class="btn" id="prospectVerifyEmailsButton" data-permission="prospect.execute" title="验证勾选候选的邮箱：无效、一次性邮箱会在发信资格灯上标红，发信时自动拦截">验证邮箱</button>
                 <button class="btn" id="prospectBatchCreateButton" data-permission="prospect.execute" title="把勾选的候选生成一个发信批次，确认后按计划自动发送">生成发信批次</button>
                 <button class="btn" id="prospectExcludeButton" data-permission="prospect.execute">排除</button>
                 <button class="btn primary" id="prospectSyncButton" data-permission="prospect.execute">批量转为线索</button>
@@ -26823,7 +26824,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <summary>开发信工作区</summary>
                 <div class="inline-alert"><b>发件配置</b><span id="prospectSenderStatus">请先在个人信息绑定发件邮箱。</span></div>
                 <div class="prospect-mail-form" style="margin-top:10px">
-                  <div class="form-field"><label>收件邮箱</label><input id="prospectMailTo" placeholder="自动读取候选联系方式，可手动修改"></div>
+                  <div class="form-field"><label>收件邮箱</label><div style="display:flex;gap:8px;align-items:center"><input id="prospectMailTo" style="flex:1;min-width:0" placeholder="自动读取候选联系方式，可手动修改"><button class="btn" id="prospectMailVerifyButton" type="button" title="验证该邮箱，避免无效地址退信">验证</button></div><div id="prospectMailVerifyStatus" style="margin-top:6px"></div></div>
                   <div class="form-field"><label>主题</label><input id="prospectMailSubject" placeholder="开发信主题"></div>
                   <div class="form-field"><label>正文</label><textarea id="prospectMailBody" placeholder="选择可联系候选后生成开发信正文"></textarea></div>
                 </div>
@@ -30020,6 +30021,22 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <div class="head-actions"><button class="btn primary" id="mailboxPoolAddButton" type="button">＋ 添加邮箱</button></div>
               </div>
               <div id="mailboxPoolList" class="mailbox-pool-list"><div class="mailbox-pool-empty">加载中…</div></div>
+            </section>
+
+            <section class="panel section">
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/><path d="m9 16 2 2 4-4"/></svg></span><div><h2>邮箱验证（发信前预防退信）</h2><small>免费预筛（语法 / MX / 一次性邮箱）在候选搜出后自动执行；手动点“验证”才调用第三方 API。无效邮箱不再发出（仅管理员可改）</small></div></div>
+                <div class="head-actions"><button class="btn primary" id="emailVerifySaveButton" type="button">保存</button></div>
+              </div>
+              <div class="form-grid">
+                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="emailVerifyEnabled"> 启用发信前邮箱验证</label></div>
+                <div class="form-field"><label>第三方验证服务</label><select id="emailVerifyProvider"><option value="none">不使用（仅免费预筛）</option><option value="zerobounce">ZeroBounce</option><option value="neverbounce">NeverBounce</option><option value="reoon">Reoon（emailverifier.reoon.com）</option></select><small>预筛只能挡明显无效的地址，查不出邮箱是否真实存在；接入第三方后才能确认，按次计费。Reoon 使用 Power 模式逐个检查收件箱，单次可能需要数秒到约一分钟。</small></div>
+                <div class="form-field"><label>API Key</label><input id="emailVerifyApiKey" type="password" autocomplete="new-password" maxlength="300" placeholder="第三方验证服务的 API Key"><small>加密保存，页面不会回显。</small></div>
+                <div class="form-field"><label>验证有效期（天）</label><input id="emailVerifyStaleDays" type="number" min="1" max="365" placeholder="30"><small>有效期内同一邮箱不重复验证，节省费用。</small></div>
+                <div class="form-field full"><label>拦截以下结果</label><div class="checkbox-row"><label class="checkbox-inline"><input type="checkbox" data-email-verify-block="INVALID"> 邮箱无效</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="DISPOSABLE"> 一次性邮箱</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="CATCH_ALL"> 全收域名</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="UNKNOWN"> 无法确认</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="ROLE"> 角色邮箱</label></div></div>
+                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="emailVerifyRequire"> 未验证的邮箱禁止发送（发送时自动先验证）</label><small>最严格；开启后每个新收件人发送前会多一次验证（可能产生第三方费用与延迟）。</small></div>
+                <div class="form-field full"><label>当前状态</label><div id="emailVerifyStatus" class="field-value">加载中…</div></div>
+              </div>
             </section>
 
             <section class="panel section">

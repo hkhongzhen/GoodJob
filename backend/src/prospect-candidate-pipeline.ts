@@ -1,3 +1,4 @@
+import { autoPrecheckEmails, candidateEmailAddresses } from "./email-verifier.js";
 import { createHash } from "node:crypto";
 import {
   ORGANIZATION_STRONG_IDENTITY_CONTRACT,
@@ -509,6 +510,7 @@ function mergeCandidate(
       );
     }
     store.websiteOpportunities.unshift(incoming);
+    void autoPrecheckEmails(incoming.teamId, candidateEmailAddresses(incoming));
     return { candidate: incoming, created: true, materialChanges: ["new_candidate"], evidenceAdded: true };
   }
   const materialChanges = candidateMaterialChanges(existing, incoming);

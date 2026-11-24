@@ -2008,12 +2008,13 @@ export interface WebsiteOpportunity {
   /** 发信资格灯：可发信 / 缺邮箱 / 已抑制 / 邮箱退信（附原始原因码）。由 /api/tools/website-opportunities 下发。 */
   emailEligibility?: {
     ready: boolean;
-    state: "ready" | "missing_email" | "blocked" | "bounced";
+    state: "ready" | "missing_email" | "blocked" | "bounced" | "invalid_email";
     label: string;
     code: string;
     message: string;
     recipient: string;
     skippedBounced?: string[];
+    verification?: { status: "DELIVERABLE" | "DOMAIN_VALID" | "INVALID" | "CATCH_ALL" | "DISPOSABLE" | "ROLE" | "UNKNOWN"; reason: string; checkedAt: string };
   };
   selected?: boolean;
   ownerId?: string;

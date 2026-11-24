@@ -10,6 +10,7 @@ import { type User } from "./models";
 import { badge, escapeHtml, qs, qsa, roleLabel, setFieldValue, storage } from "./shared";
 import { loadCompanyProfile, renderEmailConfigurationReminders } from "./development-email";
 import { api, setButtonPending, toast } from "./ui";
+import { loadEmailVerificationConfig } from "./email-verification";
 import { applyAuthedUser, roleScopeText, updateProfileSmtpHints } from "./auth";
 
 export function renderProfile(user = state.user) {
@@ -64,6 +65,7 @@ export function renderProfile(user = state.user) {
   void loadSenderMailboxes();
   void loadEmailTrackingConfig();
   void loadBounceGuardConfig();
+  void loadEmailVerificationConfig();
 }
 
 // ---------------------------------------------------------------------------

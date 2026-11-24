@@ -4,6 +4,7 @@
  * 由 prototype-api.ts 拆分而来：代码逐字迁移。本模块只包含函数、类型和字面量初始化的状态，
  * 加载期执行的代码（顶层语句与依赖其他变量的初始化）都留在入口 prototype-api.ts，按原顺序执行。
  */
+import { emailVerificationBadge, refreshMailToVerify } from "./email-verification";
 import { isLeadSourceExecutable } from "../lead-source-selection";
 import { type ProspectRadarCandidate, type ProspectRadarController, type ProspectRadarFrame, type ProspectRadarFrameTone, type ProspectRadarModel, type ProspectRadarRelation } from "../prospect-radar";
 import { activateNavView, closeModal, leadBriefMode, leadFinderJobs, openModal, renderProspectList, state } from "../prototype-api";
@@ -2052,6 +2053,7 @@ export function renderProspectDetail(item?: WebsiteOpportunity | null) {
     mailTo.readOnly = false;
     mailTo.placeholder = "收件邮箱";
   }
+  void refreshMailToVerify();
   renderProspectMailPreview();
 }
 
@@ -2381,7 +2383,10 @@ export function prospectEmailEligibilityBadge(item: WebsiteOpportunity) {
     ? (eligibility.skippedBounced?.length ? "amber" : "green")
     : eligibility.state === "missing_email" ? "amber" : "red";
   const title = `[${eligibility.code}] ${eligibility.message}`;
-  return `<span class="prospect-eligibility" title="${escapeHtml(title)}">${badge(eligibility.label, tone)}</span>`;
+  const verified = eligibility.recipient
+    ? emailVerificationBadge(eligibility.verification ? { ...eligibility.verification, email: eligibility.recipient, provider: "", isRole: false, isCatchAll: false, isDisposable: false } : null)
+    : "";
+  return `<span class="prospect-eligibility" title="${escapeHtml(title)}">${badge(eligibility.label, tone)}</span>${verified}`;
 }
 
 function prospectsAsSyncRows(ids: string[]) {

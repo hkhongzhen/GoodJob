@@ -19,6 +19,7 @@ import { launchCustomerContact } from "./ai-engine-settings";
 import { whatsAppEntryAttrs, whatsAppEntryClass, whatsAppEntryHref, whatsAppWebLink } from "./whatsapp";
 import { type OutreachJourneyView, openOutreachCustomerJourney, outreachBadgeTone } from "./outreach";
 import { api, setButtonPending, toast } from "./ui";
+import { bindEmailVerifyControls, emailVerifyControlHtml } from "./email-verification";
 import { customerDocumentName, customerGradeHtml, customerGradeLabel, customerGradeValue } from "./leads";
 import { dealEventLabel, dealMoney, formatDateTime } from "./deals";
 import { addFollowRecord, openCustomerModal } from "./customer-intake";
@@ -320,7 +321,7 @@ export function renderCustomerDetailPage(customer?: Customer) {
         <div class="customer-page-section-head"><div><h2>联系中心</h2><p>直接联系方式与通讯工具接入点</p></div>${badge("企业微信待接入", "gray")}</div>
         <div class="customer-contact-list">
           <div class="customer-contact-row"><span>联系人</span><b>${escapeHtml(current.contact)}</b><small>主联系人</small></div>
-          <div class="customer-contact-row"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b><small>${contacts.email ? "可直接发邮件" : "待补充"}</small></div>
+          <div class="customer-contact-row"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b><small>${contacts.email ? emailVerifyControlHtml(contacts.email) : "待补充"}</small></div>
           <div class="customer-contact-row"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b><small>${contacts.phone ? "可直接拨号" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>WhatsApp</span><b>${contacts.whatsapp && whatsAppWebLink(contacts.whatsapp) ? `<a class="wa-web-link" href="${whatsAppWebLink(contacts.whatsapp)}" target="_blank" rel="noopener noreferrer">${escapeHtml(contacts.whatsapp)}</a>` : escapeHtml(contacts.whatsapp || "未维护")}</b><small>${contacts.whatsapp ? "点击直接打开 WhatsApp 网页版" : "待补充"}</small></div>
           <div class="customer-contact-row"><span>微信</span><b>${escapeHtml(contacts.wechat || "未维护")}</b><small>${contacts.wechat ? "点击下方按钮复制" : "待补充"}</small></div>
@@ -391,6 +392,7 @@ export function renderCustomerDetailPage(customer?: Customer) {
   qsa<HTMLButtonElement>("[data-customer-contact]", box).forEach((button) => {
     button.addEventListener("click", () => launchCustomerContact(current, button.dataset.customerContact as "email" | "phone" | "whatsapp" | "wechat"));
   });
+  void bindEmailVerifyControls(box);
   void loadCustomerCommunicationInsights(current);
   void loadCustomerDevEmailHistory(current);
   renderCustomerJourney(current, qs<HTMLElement>("#customerPageJourneyTimeline", box));
@@ -922,7 +924,7 @@ export function renderCustomerDrawer(customer?: Customer) {
       <div class="customer-deals-head"><h3>联系方式</h3><button class="btn" data-edit-customer-drawer>维护信息</button></div>
       <div class="info-grid">
         <div class="info"><span>主联系人</span><b>${escapeHtml(customer.contact || "待维护")}</b></div>
-        <div class="info"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b></div>
+        <div class="info"><span>邮箱</span><b>${escapeHtml(contacts.email || "未维护")}</b>${contacts.email ? emailVerifyControlHtml(contacts.email) : ""}</div>
         <div class="info"><span>电话</span><b>${escapeHtml(contacts.phone || "未维护")}</b></div>
         <div class="info"><span>WhatsApp</span><b>${contacts.whatsapp && whatsAppWebLink(contacts.whatsapp) ? `<a class="wa-web-link" href="${whatsAppWebLink(contacts.whatsapp)}" target="_blank" rel="noopener noreferrer">${escapeHtml(contacts.whatsapp)}</a>` : escapeHtml(contacts.whatsapp || "未维护")}</b></div>
         <div class="info"><span>微信</span><b>${escapeHtml(contacts.wechat || "未维护")}</b></div>
@@ -975,6 +977,7 @@ export function renderCustomerDrawer(customer?: Customer) {
   });
   qs<HTMLButtonElement>("[data-customer-release-drawer]", drawer)?.addEventListener("click", () => openCustomerReleaseModal(customer));
   qs<HTMLButtonElement>("[data-customer-research]", drawer)?.addEventListener("click", () => openBackgroundResearch("customer", customer.id, customer.company, "customers"));
+  void bindEmailVerifyControls(drawer);
   qs<HTMLButtonElement>("[data-customer-email]", drawer)?.addEventListener("click", () => openDevelopmentEmail("customer", customer.id, customer.company, "customers", customerContactDetails(customer).whatsapp));
   qs<HTMLButtonElement>("[data-customer-meeting]", drawer)?.addEventListener("click", () => openMeetingRecorder(customer));
   qs<HTMLButtonElement>("[data-customer-meeting-todo]", drawer)?.addEventListener("click", (event) => {

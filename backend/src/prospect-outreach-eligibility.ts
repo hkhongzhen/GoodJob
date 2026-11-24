@@ -1,6 +1,7 @@
 import { buildProspectScorecard } from "./prospect-scorecard.js";
 import { currentApprovedProspectDecision } from "./prospect-qualification-workflow.js";
 import type { CrmStore } from "./store.js";
+import { emailVerificationBlockReason, getEmailVerification, type EmailVerificationStatus } from "./email-verifier.js";
 import type {
   Customer,
   Lead,
@@ -316,7 +317,7 @@ export function assertProspectEmailOutreachEligible(
   };
 }
 
-export type ProspectEmailOutreachState = "ready" | "missing_email" | "blocked" | "bounced";
+export type ProspectEmailOutreachState = "ready" | "missing_email" | "blocked" | "bounced" | "invalid_email";
 
 export interface ProspectEmailOutreachEligibility {
   ready: boolean;
@@ -328,6 +329,8 @@ export interface ProspectEmailOutreachEligibility {
   recipient: string;
   /** 因已退信而被跳过的邮箱；非空表示当前收件人是备用邮箱（灯仍可发，但界面应提示） */
   skippedBounced?: string[];
+  /** 收件人的邮箱验证结果；未验证时为空 */
+  verification?: { status: EmailVerificationStatus; reason: string; checkedAt: string };
 }
 
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu;
@@ -335,7 +338,8 @@ const EMAIL_STATE_LABELS: Record<ProspectEmailOutreachState, string> = {
   ready: "可发信",
   missing_email: "缺邮箱",
   blocked: "已抑制",
-  bounced: "邮箱退信"
+  bounced: "邮箱退信",
+  invalid_email: "邮箱未通过验证"
 };
 const READY_FALLBACK_LABEL = "可发信·备用邮箱";
 
@@ -381,6 +385,19 @@ export function evaluateProspectEmailOutreachEligibility(
   at = new Date().toISOString(),
   recipientOverride = ""
 ): ProspectEmailOutreachEligibility {
+  const result = evaluateEligibilityCore(store, candidate, at, recipientOverride);
+  const record = result.recipient ? getEmailVerification(candidate.teamId, result.recipient) : undefined;
+  return record
+    ? { ...result, verification: { status: record.status, reason: record.reason, checkedAt: record.checkedAt } }
+    : result;
+}
+
+function evaluateEligibilityCore(
+  store: CrmStore,
+  candidate: WebsiteOpportunity,
+  at = new Date().toISOString(),
+  recipientOverride = ""
+): ProspectEmailOutreachEligibility {
   const approved = currentApprovedProspectDecision(store, candidate, at);
   const approvedEmail = approved && approved.channel.channelType === formalChannelType("email")
     ? approved.channel.value
@@ -411,8 +428,20 @@ export function evaluateProspectEmailOutreachEligibility(
     };
   }
   const bounced = bouncedRecipients(store, candidate.teamId);
-  const recipient = emails.find((email) => !bounced.has(email.toLowerCase())) || "";
+  const unverified = (email: string) => emailVerificationBlockReason(candidate.teamId, email);
+  const recipient = emails.find((email) => !bounced.has(email.toLowerCase()) && !unverified(email)) || "";
   if (!recipient) {
+    const rejected = emails.filter((email) => !bounced.has(email.toLowerCase()));
+    if (rejected.length) {
+      return {
+        ready: false,
+        state: "invalid_email",
+        label: EMAIL_STATE_LABELS.invalid_email,
+        code: "PROSPECT_OUTREACH_RECIPIENT_UNVERIFIED",
+        message: `邮箱验证未通过：${rejected.map((email) => `${email}（${unverified(email)}）`).join("、")}，请补充其他有效邮箱`,
+        recipient: ""
+      };
+    }
     return {
       ready: false,
       state: "bounced",
@@ -424,7 +453,7 @@ export function evaluateProspectEmailOutreachEligibility(
   }
   try {
     const result = assertProspectEmailOutreachEligible(store, candidate, recipient, at);
-    const skippedBounced = emails.filter((email) => bounced.has(email.toLowerCase()));
+    const skippedBounced = emails.filter((email) => bounced.has(email.toLowerCase()) || unverified(email));
     if (skippedBounced.length) {
       return {
         ready: true,

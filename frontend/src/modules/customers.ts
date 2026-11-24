@@ -15,7 +15,8 @@ import {
 } from "./customer-detail";
 import { openWhatsAppForContact } from "./development-email";
 import { whatsAppEntryAttrs, whatsAppEntryClass } from "./whatsapp";
-import { api, toast } from "./ui";
+import { api, setButtonPending, toast } from "./ui";
+import { summarizeVerification, verifyEmails } from "./email-verification";
 import { customerGradeHtml, customerGradeLabel, customerGradeValue, filteredCustomers } from "./leads";
 import { formatDateTime } from "./deals";
 import { bulkDeleteCustomers, openCustomerModal } from "./customer-intake";
@@ -395,6 +396,7 @@ function renderCustomerBulkBar(customers: Customer[]) {
     <span class="filter">已选 ${selectedCount} 个客户</span>
     <span class="filter">国家：全部</span><span class="filter">商机阶段：全部</span><span class="filter">最近跟进：30 天</span>
     <button class="btn danger" data-bulk-delete-customers ${selectedCount ? "" : "disabled"}>批量删除</button>
+    <button class="btn" data-bulk-verify-emails ${selectedCount ? "" : "disabled"}>批量验证邮箱</button>
     <button class="btn">批量导出</button>
   `;
   if (dock) toolbar.appendChild(dock);
@@ -406,6 +408,23 @@ function renderCustomerBulkBar(customers: Customer[]) {
     renderCustomers(state.customers);
   });
   qs<HTMLButtonElement>("[data-bulk-delete-customers]", toolbar)?.addEventListener("click", () => void bulkDeleteCustomers());
+  const verifyButton = qs<HTMLButtonElement>("[data-bulk-verify-emails]", toolbar);
+  verifyButton?.addEventListener("click", async () => {
+    const emails = state.customers
+      .filter((customer) => state.selectedCustomerIds.includes(customer.id))
+      .map((customer) => customerContactDetails(customer).email)
+      .filter(Boolean);
+    if (!emails.length) { toast("所选客户都没有邮箱", "error"); return; }
+    setButtonPending(verifyButton, true, "批量验证邮箱", "验证中");
+    try {
+      const { results, errors } = await verifyEmails(emails);
+      toast(summarizeVerification(results, errors), errors.length ? "error" : "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "批量验证失败", "error");
+    } finally {
+      setButtonPending(verifyButton, false, "批量验证邮箱", "验证中");
+    }
+  });
 }
 
 function customerMapMetrics(customers: Customer[]) {

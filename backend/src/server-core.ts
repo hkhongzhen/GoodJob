@@ -195,6 +195,7 @@ import { ProspectQualificationWorkflowError } from "./prospect-qualification-wor
 import "./prospect-qualification.js"; // 保持模块加载顺序与拆分前一致
 import { ProspectQualificationError } from "./prospect-qualification.js";
 import "./prospect-outreach-eligibility.js"; // 保持模块加载顺序与拆分前一致
+import { assertEmailVerifiedForSend, setEmailVerificationPolicyRuntime, EMAIL_VERIFICATION_POLICY_KEY } from "./email-verifier.js";
 import { assertCrmOutreachEligible, assertProspectEmailOutreachEligible, ProspectOutreachEligibilityError } from "./prospect-outreach-eligibility.js";
 import "./prospect-outreach.js"; // 保持模块加载顺序与拆分前一致
 import { migrateProspectFollowUpTodos, recordProspectTouchpoint } from "./prospect-outreach.js";
@@ -1279,6 +1280,7 @@ export async function dispatchOutboundEmail(
       throw new Error("发信保护：发件域名未通过 SPF、DMARC 或已配置 DKIM selector 检查");
     }
   }
+  await assertEmailVerifiedForSend(user.teamId, input.to);
   assertOutboundEmailRiskPolicy(store, user, input.to);
   const createdAt = new Date().toISOString();
   const log = recordOutboundEmailLog(store, {
@@ -6775,6 +6777,7 @@ export async function startServer() {
     // 追踪公网地址支持「设置页运行时配置」优先于 env（app_settings 持久化）
     setEmailTrackingRuntimeBaseUrl(await getAppSetting(EMAIL_TRACKING_BASE_URL_KEY));
     setOutboundBounceGuardRuntime(await getAppSetting(OUTBOUND_BOUNCE_GUARD_KEY));
+    setEmailVerificationPolicyRuntime(await getAppSetting(EMAIL_VERIFICATION_POLICY_KEY));
     validateEmailTrackingSecurity();
     validateAgentJobSecurity();
     validateTradeObservationCursorSecurity();

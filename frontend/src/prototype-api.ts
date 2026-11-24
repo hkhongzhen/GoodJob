@@ -37,6 +37,7 @@ import {
   superWebProviders, superWebSearchMode, syncLeadFinderStartState, syncSelectedProspects, toggleSuperAiDiscovery,
   toggleSuperMapSearch, toggleSuperWebSearch, updateProspectBatch, websiteContactDisplay, websiteDomain
 } from "./modules/prospecting";
+import { refreshMailToVerify, candidateEmails, summarizeVerification, verifyEmails, loadEmailVerificationConfig, saveEmailVerificationConfig } from "./modules/email-verification";
 import { installIntegrationCenterInteractions, integrationCenterController, prefillLoginCredentials, workspaceTabKey } from "./modules/events";
 import {
   type DatabaseMaintenanceEvent, type DatabaseMaintenanceJob, type MysqlImportSelection, databaseJobStatusLabel,
@@ -1786,6 +1787,7 @@ export function renderProspectList() {
           qs<HTMLElement>("#prospect-list .prospect-detail-panel")?.scrollTo({ top: 0 });
         }
         qs<HTMLInputElement>("#prospectMailTo")!.value = "";
+        void refreshMailToVerify();
         qs<HTMLInputElement>("#prospectMailSubject")!.value = "";
         qs<HTMLTextAreaElement>("#prospectMailBody")!.value = "";
         renderProspectList();
@@ -2827,6 +2829,7 @@ function installEvents() {
   qs<HTMLButtonElement>("#companyProfileSaveButton")?.addEventListener("click", () => void saveCompanyProfile());
   qs<HTMLButtonElement>("#mailboxPoolAddButton")?.addEventListener("click", () => openSenderMailboxModal());
   qs<HTMLButtonElement>("#trackingSaveButton")?.addEventListener("click", (event) => void saveEmailTrackingConfig(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#emailVerifySaveButton")?.addEventListener("click", (event) => void saveEmailVerificationConfig(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#bounceGuardSaveButton")?.addEventListener("click", (event) => void saveBounceGuardConfig(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#mysqlImportPicker")?.addEventListener("click", () => qs<HTMLInputElement>("#mysqlImportFile")?.click());
   qs<HTMLInputElement>("#mysqlImportFile")?.addEventListener("change", (event) => {
@@ -3761,6 +3764,25 @@ function installEvents() {
   qs<HTMLButtonElement>("#prospectSendMailButton")?.addEventListener("click", (event) => void sendProspectDevelopmentEmail(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectSyncButton")?.addEventListener("click", (event) => void syncSelectedProspects(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectEnrichContactsButton")?.addEventListener("click", (event) => void enrichSelectedProspectContacts(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#prospectVerifyEmailsButton")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const emails = state.websiteOpportunities
+      .filter((item) => state.selectedProspectIds.includes(item.id))
+      .flatMap((item) => candidateEmails(item));
+    if (!emails.length) { toast(state.selectedProspectIds.length ? "所选候选没有可验证的邮箱" : "请先勾选候选", "error"); return; }
+    setButtonPending(button, true, "验证邮箱", "验证中");
+    try {
+      const { results, errors } = await verifyEmails(emails);
+      const refreshed = await api<{ opportunities: WebsiteOpportunity[] }>("/api/tools/website-opportunities");
+      state.websiteOpportunities = refreshed.opportunities;
+      renderProspectList();
+      toast(summarizeVerification(results, errors), errors.length ? "error" : "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "邮箱验证失败", "error");
+    } finally {
+      setButtonPending(button, false, "验证邮箱", "验证中");
+    }
+  });
   qs<HTMLButtonElement>("#prospectBatchCreateButton")?.addEventListener("click", (event) => void createOutreachBatchFromSelection(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectExcludeButton")?.addEventListener("click", (event) => requestProspectExclusion(state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#prospectAssignButton")?.addEventListener("click", (event) => void updateProspectBatch("assign", state.selectedProspectIds, event.currentTarget as HTMLButtonElement));
@@ -4421,6 +4443,7 @@ export function activateNavView(view: string, after?: () => void) {
     void loadSenderMailboxes();
     void loadEmailTrackingConfig();
     void loadBounceGuardConfig();
+    void loadEmailVerificationConfig();
   }
   if (view === "sales-skill-center") {
     void loadSalesSkillCenter();

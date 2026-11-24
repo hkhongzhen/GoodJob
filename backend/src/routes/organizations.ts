@@ -4,6 +4,7 @@
  * 由 server.ts 拆分而来：代码逐字迁移，注册顺序与拆分前一致。
  * 共享逻辑与全局中间件在 ../server-core.ts。
  */
+import { autoPrecheckEmails, candidateEmailAddresses } from "../email-verifier.js";
 import type { Express } from "express";
 import { type Response } from "express";
 import { z } from "zod";
@@ -207,10 +208,11 @@ export function registerOrganizationsRoutes(app: Express) {
       }
     }
     const runningResearchSet = new Set(runningResearchIds);
-    const scoped = store.websiteOpportunities
-      .filter((item) =>
-        canSeeOwner(req.user!, item.ownerId, item.teamId)
-      )
+    // 默认免费预筛：搜出的候选邮箱先做语法 / MX / 一次性检查；最多等 3 秒，没跑完的留到下次刷新
+    const visible = store.websiteOpportunities.filter((item) => canSeeOwner(req.user!, item.ownerId, item.teamId));
+    const precheck = autoPrecheckEmails(req.user!.teamId, visible.flatMap((item) => candidateEmailAddresses(item)));
+    await Promise.race([precheck, new Promise((resolve) => setTimeout(resolve, 3000))]);
+    const scoped = visible
       .map((item) => {
         const scored = refreshProspectScorecard(store, { ...item });
         const verified = ensureProspectVerificationReport(scored);

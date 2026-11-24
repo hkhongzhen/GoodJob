@@ -1,3 +1,4 @@
+import { emailVerificationBlockReason, emailVerificationPolicy, verifyEmail } from "./email-verifier.js";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { evaluateProspectEmailOutreachEligibility } from "./prospect-outreach-eligibility.js";
@@ -674,9 +675,25 @@ export async function approveProspectOutreachBatch(
   const batch = getProspectOutreachBatch(store, user, id);
   if (batch.status === "cancelled") throw Object.assign(new Error("已取消的批次不能放行，请重建批次"), { statusCode: 409 });
   if (batch.status !== "draft") throw Object.assign(new Error("该批次已放行或已结束"), { statusCode: 409 });
+  // 放行前先验证收件邮箱（缓存命中不重复调用；验证服务失败不阻断放行，发送时 dispatch 仍会再守卫）
+  if (emailVerificationPolicy().enabled) {
+    const pending = [...new Set(batch.items.filter((item) => item.status === "ready" && item.recipient).map((item) => item.recipient.toLowerCase()))];
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
+      while (cursor < pending.length) {
+        await verifyEmail(user.teamId, pending[cursor++]).catch(() => undefined);
+      }
+    }));
+  }
   // 重算：放行时再次评估资格，资格已失效的从冻结快照中剔除
   for (const item of batch.items) {
     if (item.status !== "ready") continue;
+    const verificationBlock = item.recipient ? emailVerificationBlockReason(user.teamId, item.recipient) : null;
+    if (verificationBlock && batch.targetType === "lead") {
+      item.status = "skipped";
+      item.skipReason = `放行复核未通过：邮箱验证未通过 ${item.recipient}（${verificationBlock}）`;
+      continue;
+    }
     if (batch.targetType === "lead") {
       const lead = findOwnedLead(store, user, item.leadId || "");
       const leadCheck = lead ? evaluateLeadBatchItemEligibility(store, lead) : null;
