@@ -26403,7 +26403,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
           </div>
         </div>
 
-        <div class="view lf-cli-only" id="lead-finder">
+        <div class="view" id="lead-finder">
           <div class="page-head prospect-page-head">
             <div><h1>搜客</h1><p>搜客、验证与清洗实时协作</p></div>
             <div class="head-actions"><button class="btn primary" id="leadFinderCliAcquireButton" data-permission="prospect.execute" type="button">CLI 获客</button><button class="btn" id="leadFinderLfindButton" data-permission="prospect.execute" type="button">Lfind 深入查询</button><button class="btn primary" id="leadFinderStartButton" data-permission="prospect.execute">新建搜客任务</button></div>
@@ -26420,6 +26420,8 @@ body.platform-mode .workspace-tabs { display:none !important; }
                 <div class="lead-search-mode" role="group" aria-label="搜索模式">
                   <button class="active" type="button" data-lead-search-mode="standard">标准搜索</button>
                   <button type="button" data-lead-search-mode="super">超级搜索</button>
+                  <button type="button" data-lead-search-mode="lfind" title="本地 Runner + CLI 深入查询（Lfind Skill）">Lfind 深入查询</button>
+                  <button type="button" data-lead-search-mode="cli" title="本地 Runner + CLI 获客">CLI 获客</button>
                 </div>
                 <div class="lead-brief-mode" role="group" aria-label="搜索方式">
                   <button class="active" type="button" data-lead-brief-mode="nl">自然语言</button>

@@ -33,7 +33,7 @@ import {
   renderProspectMailPreview, renderSuperAiDiscoveryOption, renderSuperMapSearchOption, renderSuperSearchPreview,
   renderSuperWebSearchOption, renderWebsiteOpportunities, requestProspectExclusion, researchRunningBadgeHtml,
   scrollLeadFinderLiveToLatest, selectedProspect, selectedSuperWebProviderIds, sendProspectDevelopmentEmail,
-  setLeadFinderMode, startContactEnrichment, superAiDiscoveryMode, superMapProviders, superMapSearchMode,
+  leadSearchRoute, leadSearchRouteFrom, setLeadFinderMode, startContactEnrichment, superAiDiscoveryMode, superMapProviders, superMapSearchMode,
   superWebProviders, superWebSearchMode, syncLeadFinderStartState, syncSelectedProspects, toggleSuperAiDiscovery,
   toggleSuperMapSearch, toggleSuperWebSearch, updateProspectBatch, websiteContactDisplay, websiteDomain
 } from "./modules/prospecting";
@@ -2326,6 +2326,13 @@ function syncLfindTaskPolling() {
   }, 3_000);
 }
 
+/** 搜客四选一：开始按钮按当前选中的途径分发 */
+function startLeadSearchByRoute(button: HTMLButtonElement) {
+  if (leadSearchRoute === "cli") { openCliAcquireModal(); return Promise.resolve(); }
+  if (leadSearchRoute === "lfind") return runLfindLeadSearch(button);
+  return runLeadFinder(button);
+}
+
 async function runLfindLeadSearch(button?: HTMLButtonElement) {
   const originalText = button?.textContent || "Lfind 深入查询";
   const setBusy = (text: string) => {
@@ -3429,7 +3436,7 @@ function installEvents() {
     qs<HTMLElement>(selector)?.addEventListener("change", renderSuperSearchPreview);
   });
   qsa<HTMLButtonElement>("[data-lead-search-mode]").forEach((button) => {
-    button.addEventListener("click", () => setLeadFinderMode(button.dataset.leadSearchMode === "super" ? "super" : "standard"));
+    button.addEventListener("click", () => setLeadFinderMode(leadSearchRouteFrom(button.dataset.leadSearchMode)));
   });
   qsa<HTMLButtonElement>("[data-lead-brief-mode]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -3482,8 +3489,8 @@ function installEvents() {
   });
   qs<HTMLButtonElement>("#leadSourceCenterButton")?.addEventListener("click", () => openLeadSourceCenter());
   qs<HTMLButtonElement>("#leadSourceManageInline")?.addEventListener("click", () => openLeadSourceCenter());
-  qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void runLeadFinder(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderStartButton")?.addEventListener("click", (event) => void startLeadSearchByRoute(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#leadFinderStartButtonInline")?.addEventListener("click", (event) => void startLeadSearchByRoute(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderLfindButton")?.addEventListener("click", (event) => void runLfindLeadSearch(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderLfindInlineButton")?.addEventListener("click", (event) => void runLfindLeadSearch(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderCliAcquireButton")?.addEventListener("click", () => openCliAcquireModal());
@@ -3650,7 +3657,7 @@ function installEvents() {
     }
     if (target.closest("[data-lead-empty-start]")) {
       event.preventDefault();
-      void runLeadFinder(target.closest("[data-lead-empty-start]") as HTMLButtonElement);
+      void startLeadSearchByRoute(target.closest("[data-lead-empty-start]") as HTMLButtonElement);
     }
     // 仅 CLI 模式下搜客助手空状态的入口：与顶部「CLI 获客」打开同一个弹窗
     if (target.closest("[data-lead-empty-cli]")) {

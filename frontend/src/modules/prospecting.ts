@@ -40,6 +40,14 @@ export let prospectRadarController: ProspectRadarController | null = null;
 export let prospectRadarActiveJobId = "";
 let prospectRadarLoading = false;
 export let leadFinderMode: "standard" | "super" = "standard";
+export type LeadSearchRoute = "standard" | "super" | "lfind" | "cli";
+export let leadSearchRoute: LeadSearchRoute = "standard";
+export function leadSearchRouteFrom(value?: string): LeadSearchRoute {
+  return value === "super" || value === "lfind" || value === "cli" ? value : "standard";
+}
+const LEAD_SEARCH_START_LABELS: Record<LeadSearchRoute, string> = {
+  standard: "开始搜客", super: "启动超级搜索", lfind: "启动 Lfind 深入查询", cli: "打开 CLI 获客"
+};
 let leadSuperPreviewTimer = 0;
 
 export function renderWebsiteOpportunities(opportunities: WebsiteOpportunity[]) {
@@ -3054,9 +3062,11 @@ export function renderSuperSearchPreview() {
   }, 280);
 }
 
-export function setLeadFinderMode(mode: "standard" | "super") {
+export function setLeadFinderMode(route: LeadSearchRoute) {
+  leadSearchRoute = route;
+  const mode: "standard" | "super" = route === "super" ? "super" : "standard";
   leadFinderMode = mode;
-  qsa<HTMLButtonElement>("[data-lead-search-mode]").forEach((button) => button.classList.toggle("active", button.dataset.leadSearchMode === mode));
+  qsa<HTMLButtonElement>("[data-lead-search-mode]").forEach((button) => button.classList.toggle("active", button.dataset.leadSearchMode === route));
   const config = qs<HTMLElement>("#leadSuperSearchConfig");
   if (config) config.hidden = mode !== "super";
   const webSearch = qs<HTMLInputElement>("#leadSuperWebSearch");
@@ -3083,7 +3093,7 @@ export function setLeadFinderMode(mode: "standard" | "super") {
   const title = qs<HTMLButtonElement>("#leadFinderStartButton");
   const inline = qs<HTMLButtonElement>("#leadFinderStartButtonInline");
   [title, inline].forEach((button) => {
-    if (button) button.textContent = mode === "super" ? "启动超级搜索" : "开始搜客";
+    if (button) button.textContent = LEAD_SEARCH_START_LABELS[route];
   });
   renderSuperWebSearchOption();
   renderSuperMapSearchOption();
@@ -3145,7 +3155,7 @@ export function syncLeadFinderStartState() {
   );
   const urlInput = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
   const urlCount = (urlInput?.value || "").split(/\n|,|，/).map((item) => item.trim()).filter(Boolean).length;
-  const needsSource = !aiReady && !hasExecutableApiSource && urlCount === 0;
+  const needsSource = (leadSearchRoute === "standard" || leadSearchRoute === "super") && !aiReady && !hasExecutableApiSource && urlCount === 0;
   ["#leadFinderStartButton", "#leadFinderStartButtonInline", "[data-lead-empty-start]"].forEach((sel) => {
     const button = qs<HTMLButtonElement>(sel);
     if (!button) return;
