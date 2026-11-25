@@ -1,3 +1,4 @@
+import { currentAiModelConfig } from "../ai-model-selection.js";
 /**
  * 知识库训练路由。
  *
@@ -81,11 +82,10 @@ function kbAssetIndex(actor: SessionUser, ids: string[]): Map<string, KbAssetRef
   return index;
 }
 
-/** CLI 失败时的降级档：本团队里已启用且填了 key 的模型，取最近更新的那个。 */
+/** CLI 失败时的降级档：复用当前账号的模型。 */
 function kbAiConfigFor(actor: SessionUser): AiModelConfig | undefined {
-  return getStore().aiModelConfigs
-    .filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId && item.enabled && item.apiKey && item.baseUrl && item.model)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  const current = currentAiModelConfig(getStore(), actor.id, actor.teamId);
+  return current?.baseUrl && current.model ? current : undefined;
 }
 
 function kbSourceAssetIds(spec: KbTrainingSourceSpec): string[] {

@@ -1,3 +1,4 @@
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { domainToASCII } from "node:url";
@@ -960,14 +961,8 @@ function providerReadinessIssues(
         && item.status === "active"
         && ["brave", "serper", "serpapi", "google_places"].includes(item.providerId)
       );
-      const ready = store.aiModelConfigs.some((item) =>
-        item.ownerId === strategy.ownerId
-        && item.teamId === strategy.teamId
-        && item.enabled
-        && item.useLeadFinder
-        && Boolean(item.apiKey)
-        && aiLeadFinderReadiness(item, externalWebsiteSearchReady).ready
-      );
+      const current = currentAiModelConfig(store, strategy.ownerId, strategy.teamId);
+      const ready = current?.useLeadFinder && aiLeadFinderReadiness(current, externalWebsiteSearchReady).ready;
       if (!ready) {
         issues.push({
           code: "AI_PROVIDER_NOT_READY",

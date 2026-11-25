@@ -27955,139 +27955,104 @@ body.platform-mode .workspace-tabs { display:none !important; }
         </div>
 
         <div class="view" id="ai-config">
-          <div class="dense-grid">
-            <div class="dense-card"><span>当前供应商</span><b id="gptProviderState">OpenAI</b><small id="gptProtocolState">OpenAI兼容协议</small></div>
-            <div class="dense-card"><span>配置状态</span><b id="gptConfigState">未启用</b><small id="gptConfigSub">等待 API Key</small></div>
-            <div class="dense-card"><span>默认模型</span><b id="gptModelState">gpt-4o-mini</b><small>按账号隔离保存</small></div>
-            <div class="dense-card"><span>应用范围</span><b id="gptUseState">0 个模块</b></div>
-          </div>
-
-          <div class="ai-studio-grid">
+          <style>
+            #ai-config [data-ai-settings-panel][hidden] { display: none; }
+            #ai-config .ai-settings-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+            #ai-config .ai-settings-models { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2fr); gap: 14px; }
+            #ai-config .ai-settings-models > section { min-width: 0; }
+            #ai-config .ai-settings-models .ai-instance-list { margin-top: 12px; }
+            #ai-config #gptBaseUrlSuggestions { width: 100%; }
+            #ai-config [data-ai-settings-panel="sources"] .ls-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+            @media (max-width: 800px) {
+              #ai-config .ai-settings-models { grid-template-columns: minmax(0, 1fr); }
+            }
+          </style>
+          <nav class="ai-settings-nav" aria-label="AI 配置项目">
+            <button class="btn primary" type="button" data-ai-settings-tab="model" aria-pressed="true">AI 模型</button>
+            <button class="btn" type="button" data-ai-settings-tab="sources" aria-pressed="false">搜客数据源</button>
+            <button class="btn" type="button" data-ai-settings-tab="verification" aria-pressed="false">邮箱验证</button>
+            <button class="btn" type="button" data-ai-settings-tab="engine" aria-pressed="false">AI 执行来源</button>
+          </nav>
+          <div class="ai-settings-models" data-ai-settings-panel="model">
             <section class="panel section">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>供应商预设</h2></div></div></div>
-              <p class="ai-provider-hint">标记 <b>免费</b> 的模型可用于评分、文案和企业候选生成。自动获客确认官网时，OpenAI 模型必须通过 Web Search 测试；其它模型还需配置 Brave、Serper、SerpApi 或 Google Places。</p>
-              <div class="ai-free-fallback" id="aiFreeFallback">
-                <div class="ai-free-fallback-head">
-                  <span class="ai-free-tag">免费兜底</span>
-                  <b>普通 AI 免费方案：智谱 GLM-4-Flash-250414</b>
-                </div>
-                <p class="ai-free-fallback-sub">适合线索评分、开发信和企业候选生成，但本身不能联网确认官网。用于自动获客时，需再配置一个官网搜索 API：</p>
-                <ol class="ai-free-steps">
-                  <li>访问 <a href="https://open.bigmodel.cn/user/register" target="_blank" rel="noopener">智谱官方注册页</a>，用手机号 / 邮箱完成注册（实名认证，免费）。</li>
-                  <li>进入 <a href="https://open.bigmodel.cn/usercenter/apikeys" target="_blank" rel="noopener">API 密钥中心</a>，新建一个 Key 并复制保存。</li>
-                  <li>点击下方「智谱 GLM」卡片，粘贴 Key、启用配置并测试普通 AI 连接。</li>
-                  <li>在数据源中心配置 Brave、Serper、SerpApi 或 Google Places，系统再允许启动自动获客。</li>
-                </ol>
-                <p class="ai-free-note">备选免费源：<a href="https://siliconflow.cn/" target="_blank" rel="noopener">硅基流动 SiliconFlow</a>（新用户赠 2000 万 Tokens 免费额度，含 DeepSeek / Qwen / GLM 免费模型，同样 OpenAI 兼容，已加入下方卡片）。</p>
+              <div class="section-head">
+                <div class="section-title"><div><h2>模型配置</h2><small>每个账号可选一个当前模型</small></div></div>
+                <button class="btn" id="aiNewConfigButton" type="button">新增配置</button>
               </div>
-              <div class="ai-provider-list" id="aiProviderList">
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="deepseek"><div class="ai-provider-top"><div class="ai-provider-mark">DS</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>DeepSeek</h3><p>深度求索 · deepseek-chat 极便宜</p></button>
-                  <a class="ai-provider-apply" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="zhipu"><div class="ai-provider-top"><div class="ai-provider-mark">智</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>智谱 GLM</h3><p>智谱 · glm-4-flash-250414 永久免费</p></button>
-                  <a class="ai-provider-apply" href="https://open.bigmodel.cn/user/register" target="_blank" rel="noopener">去官网注册并申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="siliconflow"><div class="ai-provider-top"><div class="ai-provider-mark">SF</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>硅基流动</h3><p>SiliconFlow · 新用户 2000 万免费 Tokens</p></button>
-                  <a class="ai-provider-apply" href="https://siliconflow.cn/" target="_blank" rel="noopener">去官网注册并申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="qwen"><div class="ai-provider-top"><div class="ai-provider-mark">QW</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>通义千问</h3><p>阿里 DashScope · qwen 系列免费额度</p></button>
-                  <a class="ai-provider-apply" href="https://dashscope.console.aliyun.com/" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="volcengine"><div class="ai-provider-top"><div class="ai-provider-mark">豆</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>火山豆包</h3><p>火山引擎 Ark · doubao 免费额度</p></button>
-                  <a class="ai-provider-apply" href="https://console.volcengine.com/ark" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="moonshot"><div class="ai-provider-top"><div class="ai-provider-mark">K</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>Moonshot Kimi</h3><p>月之暗面 · 中文长文免费试用</p></button>
-                  <a class="ai-provider-apply" href="https://platform.moonshot.cn/" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="groq"><div class="ai-provider-top"><div class="ai-provider-mark">GQ</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>Groq</h3><p>开源模型高速推理 · 免费档</p></button>
-                  <a class="ai-provider-apply" href="https://console.groq.com/keys" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="openrouter"><div class="ai-provider-top"><div class="ai-provider-mark">OR</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>OpenRouter</h3><p>聚合平台 · 含免费模型</p></button>
-                  <a class="ai-provider-apply" href="https://openrouter.ai/keys" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="ollama"><div class="ai-provider-top"><div class="ai-provider-mark">OL</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">兼容</span></div></div><h3>Ollama 本地</h3><p>本机运行 · 0 成本、数据私有</p></button>
-                  <a class="ai-provider-apply" href="https://ollama.com/download" target="_blank" rel="noopener">下载客户端 ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="gemini"><div class="ai-provider-top"><div class="ai-provider-mark">GM</div><div class="ai-provider-badges"><span class="ai-free-tag">免费</span><span class="badge gray">原生</span></div></div><h3>Google Gemini</h3><p>Gemini · flash 免费档</p></button>
-                  <a class="ai-provider-apply" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">去官网申请免费 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="openai"><div class="ai-provider-top"><div class="ai-provider-mark">AI</div><div class="ai-provider-badges"><span class="badge green" id="gptConfigBadge">当前</span></div></div><h3>OpenAI GPT</h3><p>GPT 系列（付费）</p></button>
-                  <a class="ai-provider-apply" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">去官网申请 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="anthropic"><div class="ai-provider-top"><div class="ai-provider-mark">CL</div><div class="ai-provider-badges"><span class="badge gray">原生</span></div></div><h3>Claude</h3><p>Anthropic（付费）</p></button>
-                  <a class="ai-provider-apply" href="https://console.anthropic.com/" target="_blank" rel="noopener">去官网申请 Key ›</a>
-                </div>
-                <div class="ai-provider">
-                  <button type="button" class="ai-provider-card" data-ai-provider="custom"><div class="ai-provider-top"><div class="ai-provider-mark">API</div><div class="ai-provider-badges"><span class="badge gray">自定义</span></div></div><h3>自定义/本地模型</h3><p>任意 OpenAI 兼容接口</p></button>
-                  <a class="ai-provider-apply" href="https://platform.openai.com/docs/guides/text-generation" target="_blank" rel="noopener">查看兼容规范 ›</a>
-                </div>
-              </div>
+              <div class="ai-instance-list" id="aiConfigList"></div>
             </section>
-
-            <section class="ai-form-card">
-              <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span><div><h2>模型连接参数</h2></div></div></div>
-              <div class="ai-subsection">
-                <div class="ai-subsection-title"><b>配置实例</b></div>
-                <div class="ai-instance-toolbar"><span id="aiConfigCountText">0 个配置实例</span><div class="head-actions"><button class="btn" id="aiNewConfigButton" type="button">新增配置</button><button class="btn" id="aiToggleEnabledButton" type="button">启用当前</button><button class="btn" id="aiDeleteConfigButton" type="button">删除当前</button></div></div>
-                <div class="ai-instance-list" id="aiConfigList"><div class="empty-cell">暂无配置</div></div>
-              </div>
-              <div class="ai-subsection">
-                <div class="ai-subsection-title"><b>参数编辑</b></div>
-                <div class="inline-alert" id="aiConfigModeAlert" style="margin-bottom:12px"><b>编辑配置</b></div>
-                <div class="ai-form-grid">
-                  <div class="form-field"><label>配置名称</label><input id="gptConfigName" value="" placeholder="例如：搜客专用 Key"></div>
-                  <div class="form-field"><label>供应商</label><select id="gptProviderSelect"><option value="openai">OpenAI</option><option value="anthropic">Anthropic Claude</option><option value="gemini">Google Gemini</option><option value="deepseek">DeepSeek</option><option value="qwen">通义千问 DashScope</option><option value="moonshot">Moonshot Kimi</option><option value="zhipu">智谱 GLM</option><option value="siliconflow">硅基流动 SiliconFlow</option><option value="baidu">百度千帆</option><option value="volcengine">火山豆包</option><option value="mistral">Mistral</option><option value="groq">Groq</option><option value="openrouter">OpenRouter</option><option value="ollama">Ollama / 本地</option><option value="custom">自定义兼容接口</option></select></div>
-                  <div class="form-field"><label>协议</label><select id="gptProtocolSelect"><option value="openai-compatible">OpenAI兼容</option><option value="anthropic">Claude Messages</option><option value="gemini">Gemini生成</option></select></div>
-                  <div class="form-field"><label>模型名称</label><input id="gptModelInput" value="" placeholder="例如 gpt-4o-mini / deepseek-chat"></div>
-                  <div class="form-field full"><label>Base URL</label><input id="gptBaseUrlInput" value="" placeholder="例如 https://api.openai.com/v1"></div>
-                  <div class="form-field full"><label>API Key</label><div class="ai-secret-input"><input id="gptApiKeyInput" type="password" placeholder="保存后仅显示末四位"><button class="btn" id="gptRevealKeyButton" type="button">显示</button></div><small>留空不会覆盖原 Key；页面不会明文回显已保存密钥。</small></div>
-                  <div class="form-field"><label>启用状态</label><select id="gptEnabledSelect"><option value="false">暂不启用</option><option value="true">启用 AI 能力</option></select></div>
-                  <div class="form-field"><label>温度</label><input id="gptTemperatureInput" type="number" min="0" max="2" step="0.1" value="0.1"></div>
+            <section class="panel section">
+              <div class="section-head">
+                <div class="section-title"><h2 id="aiConfigModeAlert">模型连接参数</h2></div>
+                <div class="head-actions">
+                  <button class="btn" id="aiToggleEnabledButton" type="button" disabled>设为当前</button>
+                  <button class="btn" id="aiDeleteConfigButton" type="button" disabled>删除配置</button>
                 </div>
+              </div>
+              <div class="ai-form-grid">
+                <div class="form-field"><label for="gptConfigName">配置名称</label><input id="gptConfigName" placeholder="例如：团队日常模型"></div>
+                <div class="form-field"><label for="gptProtocolSelect">协议</label><select id="gptProtocolSelect"><option value="openai-compatible">OpenAI 兼容</option><option value="anthropic">Claude Messages</option><option value="gemini">Gemini generateContent</option></select></div>
+                <div class="form-field full"><label for="gptBaseUrlInput">Base URL</label><input id="gptBaseUrlInput" type="url" placeholder="https://api.openai.com/v1"><select id="gptBaseUrlSuggestions" aria-label="常用 API 地址"><option value="">选择常用地址（可选）</option></select></div>
+                <div class="form-field full"><label for="gptModelInput">模型名称</label><input id="gptModelInput" placeholder="例如 gpt-4o-mini 或 deepseek-chat"></div>
+                <div class="form-field full"><label for="gptApiKeyInput">API Key</label><div class="ai-secret-input"><input id="gptApiKeyInput" type="password" autocomplete="new-password"><button class="btn" id="gptRevealKeyButton" type="button">显示</button></div><small>留空保留已保存的密钥。</small></div>
+              </div>
+              <details class="ai-subsection">
+                <summary>高级设置</summary>
+                <div class="form-field"><label for="gptTemperatureInput">温度</label><input id="gptTemperatureInput" type="number" min="0" max="2" step="0.1" value="0.1"></div>
                 <div class="ai-apply-box">
-                  <label><input id="aiUseLeadFinder" type="checkbox"> 自动获客</label>
-                  <label title="为避免网页抓取风险，此能力已永久关闭"><input id="aiUseWebsiteParse" type="checkbox" disabled> 官网网页解析（已关闭）</label>
-                  <label><input id="aiUseScoring" type="checkbox"> 线索评分</label>
-                  <label><input id="aiUseEmailDraft" type="checkbox"> 开发信草稿</label>
+                  <label><input id="aiUseLeadFinder" type="checkbox" checked> 自动获客</label>
+                  <label><input id="aiUseScoring" type="checkbox" checked> 线索评分</label>
+                  <label><input id="aiUseEmailDraft" type="checkbox" checked> 开发信草稿</label>
                   <label><input id="aiUseExam" type="checkbox"> 资料/考试</label>
                 </div>
-                <div class="head-actions" style="margin-top:12px"><button class="btn" id="gptTestButton">测试连接</button><button class="btn primary" id="gptSaveButton">保存配置</button></div>
+              </details>
+              <div class="head-actions" style="margin-top:12px">
+                <button class="btn" id="gptTestButton" type="button">保存并测试</button>
+                <button class="btn primary" id="gptSaveButton" type="button">保存配置</button>
               </div>
-
-              <section class="panel section ai-result-card">
-                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5"/></svg></span><div><h2>测试结果</h2></div></div></div>
-                <section class="ai-status-hero" id="aiTestResultHero">
-                  <span class="badge" id="gptConnectionBadge">未测试</span>
-                  <h3 id="gptConnectionTitle">等待配置 API Key</h3>
-                  <p id="gptConnectionText"></p>
-                  <div class="ai-web-search-status is-pending" id="gptWebSearchStatus">官网发现：自动搜客需要先测试 Web Search</div>
-                </section>
-              </section>
-
-              <section class="panel section">
-                <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5"/></svg></span><div><h2>已覆盖模块</h2></div></div></div>
-                <div class="ai-use-list">
-                  <div class="ai-use-row" data-ai-use-row="leadFinder"><i>搜</i><div><b>搜客</b></div><span class="badge">待启用</span></div>
-                  <div class="ai-use-row" data-ai-use-row="websiteParse"><i>网</i><div><b>官网网页解析</b><span>安全策略已永久关闭，系统不会访问企业网页</span></div><span class="badge gray">已关闭</span></div>
-                  <div class="ai-use-row" data-ai-use-row="scoring"><i>评</i><div><b>线索评分</b></div><span class="badge">待启用</span></div>
-                  <div class="ai-use-row" data-ai-use-row="emailDraft"><i>信</i><div><b>开发信草稿</b></div><span class="badge">待启用</span></div>
-                  <div class="ai-use-row" data-ai-use-row="exam"><i>题</i><div><b>资料/考试</b></div><span class="badge">待启用</span></div>
-                </div>
-              </section>
+              <div class="ai-status-hero" id="aiTestResultHero" aria-live="polite">
+                <span class="badge" id="gptConnectionBadge">未测试</span>
+                <p id="gptConnectionText"></p>
+                <div class="ai-web-search-status is-pending" id="gptWebSearchStatus">尚未测试官网联网能力</div>
+              </div>
             </section>
           </div>
+          <section class="panel section" data-ai-settings-panel="sources" hidden>
+            <div class="section-head">
+              <div class="section-title"><h2 id="aiLeadSourcesTitle">搜客数据源</h2></div>
+              <button class="btn" type="button" id="aiShowAllSources" hidden>查看全部数据源</button>
+            </div>
+            <div id="aiLeadSourceCards"></div>
+          </section>
+          <section class="panel section" data-ai-settings-panel="verification" hidden>
+              <div class="section-head">
+                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/><path d="m9 16 2 2 4-4"/></svg></span><div><h2>邮箱验证（发信前预防退信）</h2><small>免费预筛（语法 / MX / 一次性邮箱）在候选搜出后自动执行；手动点“验证”才调用第三方 API。无效邮箱不再发出（仅管理员可改）</small></div></div>
+                <div class="head-actions"><button class="btn primary" id="emailVerifySaveButton" type="button" disabled>保存</button></div>
+              </div>
+              <div class="form-grid">
+                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="emailVerifyEnabled"> 启用发信前邮箱验证</label></div>
+                <div class="form-field"><label>第三方验证服务</label><select id="emailVerifyProvider"><option value="" disabled hidden>选择验证服务</option><option value="zerobounce">ZeroBounce</option><option value="neverbounce">NeverBounce</option><option value="reoon">Reoon（emailverifier.reoon.com）</option></select><small>预筛只能挡明显无效的地址，查不出邮箱是否真实存在；接入第三方后才能确认，按次计费。Reoon 使用 Power 模式逐个检查收件箱，单次可能需要数秒到约一分钟。</small></div>
+                <div class="form-field"><label>API Key</label><input id="emailVerifyApiKey" type="password" autocomplete="new-password" maxlength="300" placeholder="第三方验证服务的 API Key"><small>加密保存，页面不会回显。</small></div>
+                <div class="form-field"><label>验证有效期（天）</label><input id="emailVerifyStaleDays" type="number" min="1" max="365" placeholder="30"><small>有效期内同一邮箱不重复验证，节省费用。</small></div>
+                <div class="form-field full"><label>拦截以下结果</label><div class="checkbox-row"><label class="checkbox-inline"><input type="checkbox" data-email-verify-block="INVALID"> 邮箱无效</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="DISPOSABLE"> 一次性邮箱</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="CATCH_ALL"> 全收域名</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="UNKNOWN"> 无法确认</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="ROLE"> 角色邮箱</label></div></div>
+                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="emailVerifyRequire"> 未验证的邮箱禁止发送（发送时自动先验证）</label><small>最严格；开启后每个新收件人发送前会多一次验证（可能产生第三方费用与延迟）。</small></div>
+                <div class="form-field full"><label>当前状态</label><div id="emailVerifyStatus" class="field-value">加载中…</div></div>
+              </div>
+            </section>
+          <section class="panel section" id="aiEngineSettingsSection" data-ai-settings-panel="engine" hidden>
+            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>AI 执行来源</h2><p class="section-subtitle">背调与开发信可以由谁来做：CRM 本地分析、AI API，或本机已配对的 WorkBuddy / Codex / Claude Code CLI。这里设的是默认值，操作时还可以临时切换。</p></div></div><div class="head-actions"><span class="badge amber" id="aiEngineCliStatus">未就绪</span><button class="btn primary" id="aiEngineSaveButton" type="button" disabled>保存 AI 来源</button></div></div>
+            <div class="company-profile-form" style="margin-top:14px;">
+              <label><span>默认背调来源</span><select id="aiEngineResearchSource"><option value="crm">CRM 本地分析</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
+              <label><span>默认开发信来源</span><select id="aiEngineEmailSource"><option value="template">规则模板</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
+              <label><span>CLI 适配器</span><select id="aiEngineCliAdapter"><option value="workbuddy">WorkBuddy CLI</option><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select></label>
+              <label><span>CLI 模型</span><select id="aiEngineCliModel" title="系统默认 deepseek-v4.1-flash；选「跟随 CLI 默认」则改由 CLI 当前登录账号决定（会随切账号变化）"></select></label>
+              <label><span>思考档位</span><select id="aiEngineCliEffort" title="留空 = 跟随 CLI 默认"></select></label>
+              <label><span>CLI 超时（分钟）</span><input id="aiEngineCliTimeout" type="number" min="1" max="1440" step="1" value="15"></label>
+              <label class="wide"><span>CLI 工作目录（留空自动用 Runner 的首个授权目录）</span><input id="aiEngineCliWorkspace" placeholder="/Users/you/Desktop/GoodJob_private"></label>
+              <label class="wide"><span>指定 Runner（留空自动选择在线机器）</span><select id="aiEngineRunner"><option value="">自动选择在线的 Runner</option></select></label>
+            </div>
+            <p class="system-setting-help"><b>WorkBuddy、Codex、Claude Code 三选一。</b>团队选定一个首选 CLI；执行机上首选的不可用时会按固定顺序自动改用另一个（WorkBuddy 与 Codex 互备，Claude Code 排最后；首选 Claude 时先试 WorkBuddy 再试 Codex）。各 CLI 的模型分开保存：切换「CLI 适配器」后，模型与思考档位显示的是该 CLI 自己的那一份。<br><b>模型决定 CLI 有多聪明。</b>WorkBuddy CLI 没配过模型时默认使用 fast-model（最快档，但思考最少，做背调、写开发信这类需要判断力的任务会显得「变傻」），建议这类任务选 deep-model 或具体强模型；Codex CLI 出厂默认 gpt-5.6-sol，选「跟随本机 Codex 配置」则用 ~/.codex/config.toml 里的模型；Claude Code CLI 走你自己的 Claude 订阅（不需要 API Key），出厂默认 sonnet，复杂背调可选 opus，需先在终端执行 claude 并 /login。资料识别等纯抽取任务保持默认即可。<br>CLI 通道是「读为主」的执行：任务以只读模式在本机运行，超时上限 24 小时（1440 分钟）。机器没配对或离线时，把来源切回 AI API 或 CRM 本地分析即可继续工作，不影响已有数据。</p>
+          </section>
         </div>
 
         <div class="view" id="maintenance-center">
@@ -30025,23 +29990,7 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <div id="mailboxPoolList" class="mailbox-pool-list"><div class="mailbox-pool-empty">加载中…</div></div>
             </section>
 
-            <section class="panel section">
-              <div class="section-head">
-                <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/><path d="m9 16 2 2 4-4"/></svg></span><div><h2>邮箱验证（发信前预防退信）</h2><small>免费预筛（语法 / MX / 一次性邮箱）在候选搜出后自动执行；手动点“验证”才调用第三方 API。无效邮箱不再发出（仅管理员可改）</small></div></div>
-                <div class="head-actions"><button class="btn primary" id="emailVerifySaveButton" type="button">保存</button></div>
-              </div>
-              <div class="form-grid">
-                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="emailVerifyEnabled"> 启用发信前邮箱验证</label></div>
-                <div class="form-field"><label>第三方验证服务</label><select id="emailVerifyProvider"><option value="none">不使用（仅免费预筛）</option><option value="zerobounce">ZeroBounce</option><option value="neverbounce">NeverBounce</option><option value="reoon">Reoon（emailverifier.reoon.com）</option></select><small>预筛只能挡明显无效的地址，查不出邮箱是否真实存在；接入第三方后才能确认，按次计费。Reoon 使用 Power 模式逐个检查收件箱，单次可能需要数秒到约一分钟。</small></div>
-                <div class="form-field"><label>API Key</label><input id="emailVerifyApiKey" type="password" autocomplete="new-password" maxlength="300" placeholder="第三方验证服务的 API Key"><small>加密保存，页面不会回显。</small></div>
-                <div class="form-field"><label>验证有效期（天）</label><input id="emailVerifyStaleDays" type="number" min="1" max="365" placeholder="30"><small>有效期内同一邮箱不重复验证，节省费用。</small></div>
-                <div class="form-field full"><label>拦截以下结果</label><div class="checkbox-row"><label class="checkbox-inline"><input type="checkbox" data-email-verify-block="INVALID"> 邮箱无效</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="DISPOSABLE"> 一次性邮箱</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="CATCH_ALL"> 全收域名</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="UNKNOWN"> 无法确认</label> <label class="checkbox-inline"><input type="checkbox" data-email-verify-block="ROLE"> 角色邮箱</label></div></div>
-                <div class="form-field full"><label class="checkbox-inline"><input type="checkbox" id="emailVerifyRequire"> 未验证的邮箱禁止发送（发送时自动先验证）</label><small>最严格；开启后每个新收件人发送前会多一次验证（可能产生第三方费用与延迟）。</small></div>
-                <div class="form-field full"><label>当前状态</label><div id="emailVerifyStatus" class="field-value">加载中…</div></div>
-              </div>
-            </section>
-
-            <section class="panel section">
+              <section class="panel section">
               <div class="section-head">
                 <div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></span><div><h2>退信保护（发信熔断）</h2><small>近 N 天退信率超过阈值时自动暂停外发，防止发信域名信誉被拖垮；阈值可调，也可关闭（仅管理员）</small></div></div>
                 <div class="head-actions"><button class="btn primary" id="bounceGuardSaveButton" type="button">保存</button></div>
@@ -33749,21 +33698,6 @@ body.platform-mode .workspace-tabs { display:none !important; }
               <label class="wide"><span>硅基流动模型（仅硅基流动）</span><input id="tradeDocumentOcrModel" placeholder="Qwen/Qwen2.5-VL-32B-Instruct"></label>
             </div>
             <p class="system-setting-help">百度 OCR 负责低成本文字识别，识别结构不足时会自动交给 AI 视觉模型复核；硅基流动直接作为视觉识别模型。API Key 只写入服务器加密凭据，不会返回明文。</p>
-          </section>
-
-          <section class="panel section" id="aiEngineSettingsSection">
-            <div class="section-head"><div class="section-title"><span class="icon"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>AI 执行来源</h2><p class="section-subtitle">背调与开发信可以由谁来做：CRM 本地分析、AI API，或本机已配对的 WorkBuddy / Codex / Claude Code CLI。这里设的是默认值，操作时还可以临时切换。</p></div></div><div class="head-actions"><span class="badge amber" id="aiEngineCliStatus">未就绪</span><button class="btn primary" id="aiEngineSaveButton">保存 AI 来源</button></div></div>
-            <div class="company-profile-form" style="margin-top:14px;">
-              <label><span>默认背调来源</span><select id="aiEngineResearchSource"><option value="crm">CRM 本地分析</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
-              <label><span>默认开发信来源</span><select id="aiEngineEmailSource"><option value="template">规则模板</option><option value="ai">AI API</option><option value="cli">本机 CLI</option></select></label>
-              <label><span>CLI 适配器</span><select id="aiEngineCliAdapter"><option value="workbuddy">WorkBuddy CLI</option><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option></select></label>
-              <label><span>CLI 模型</span><select id="aiEngineCliModel" title="系统默认 deepseek-v4.1-flash；选「跟随 CLI 默认」则改由 CLI 当前登录账号决定（会随切账号变化）"></select></label>
-              <label><span>思考档位</span><select id="aiEngineCliEffort" title="留空 = 跟随 CLI 默认"></select></label>
-              <label><span>CLI 超时（分钟）</span><input id="aiEngineCliTimeout" type="number" min="1" max="1440" step="1" value="15"></label>
-              <label class="wide"><span>CLI 工作目录（留空自动用 Runner 的首个授权目录）</span><input id="aiEngineCliWorkspace" placeholder="/Users/you/Desktop/GoodJob_private"></label>
-              <label class="wide"><span>指定 Runner（留空自动选择在线机器）</span><select id="aiEngineRunner"><option value="">自动选择在线的 Runner</option></select></label>
-            </div>
-            <p class="system-setting-help"><b>WorkBuddy、Codex、Claude Code 三选一。</b>团队选定一个首选 CLI；执行机上首选的不可用时会按固定顺序自动改用另一个（WorkBuddy 与 Codex 互备，Claude Code 排最后；首选 Claude 时先试 WorkBuddy 再试 Codex）。各 CLI 的模型分开保存：切换「CLI 适配器」后，模型与思考档位显示的是该 CLI 自己的那一份。<br><b>模型决定 CLI 有多聪明。</b>WorkBuddy CLI 没配过模型时默认使用 fast-model（最快档，但思考最少，做背调、写开发信这类需要判断力的任务会显得「变傻」），建议这类任务选 deep-model 或具体强模型；Codex CLI 出厂默认 gpt-5.6-sol，选「跟随本机 Codex 配置」则用 ~/.codex/config.toml 里的模型；Claude Code CLI 走你自己的 Claude 订阅（不需要 API Key），出厂默认 sonnet，复杂背调可选 opus，需先在终端执行 claude 并 /login。资料识别等纯抽取任务保持默认即可。<br>CLI 通道是「读为主」的执行：任务以只读模式在本机运行，超时上限 24 小时（1440 分钟）。机器没配对或离线时，把来源切回 AI API 或 CRM 本地分析即可继续工作，不影响已有数据。</p>
           </section>
 
           <!-- 系统更新区域 -->

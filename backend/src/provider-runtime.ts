@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { decryptProviderConfiguration } from "./credential-security.js";
+import { decryptProviderConfiguration, type ProviderConfiguration } from "./credential-security.js";
+import { providerApiKeys, providerKeyId, supportsProviderKeyPool } from "./provider-key-pool.js";
 import type { ProviderCatalogItem, ProviderConnection, ProviderRequestLog } from "./types.js";
 import {
   ProviderContractError,
@@ -240,7 +241,7 @@ export function assertProviderOperationPolicy(
   }
 }
 
-function validateRuntime(input: RuntimeBase): ProviderCredential {
+function validateRuntime(input: RuntimeBase): ProviderCredential & Partial<ProviderConfiguration> {
   const { provider, catalog, context, connection } = input;
   let credential = input.credential || { apiKey: "" };
   for (const [label, value] of [
@@ -278,6 +279,55 @@ function validateRuntime(input: RuntimeBase): ProviderCredential {
   return credential;
 }
 
+type KeyCooldown = { failure: ProviderContractError; until: number };
+const providerKeyCooldowns = new Map<string, KeyCooldown>();
+
+async function runWithProviderKeys<T>(
+  input: RuntimeBase,
+  operation: (credential: ProviderCredential) => Promise<T>
+) {
+  const credential = validateRuntime(input);
+  const { connection, context } = input;
+  if (!connection || !credential.backupApiKeys?.length || !supportsProviderKeyPool(input.provider)
+    || (context.operation !== "search" && context.operation !== "enrich" && context.operation !== "health")) {
+    return operation(credential);
+  }
+
+  let earliest: KeyCooldown | undefined;
+  for (const apiKey of providerApiKeys({ ...credential, baseUrl: credential.baseUrl || "" })) {
+    const id = providerKeyId(connection, apiKey);
+    let cooldown = providerKeyCooldowns.get(id);
+    if (!cooldown || cooldown.until <= Date.now()) {
+      providerKeyCooldowns.delete(id);
+      try {
+        return await operation({ apiKey, baseUrl: credential.baseUrl });
+      } catch (error) {
+        const failure = providerErrorFromUnknown(error, context.operation);
+        const exhausted = failure.code === "PROVIDER_QUOTA_EXHAUSTED";
+        if (!exhausted && failure.code !== "PROVIDER_RATE_LIMITED") throw failure;
+        const now = Date.now();
+        const upstreamRetry = Date.parse(failure.retryAfterAt || "");
+        const until = upstreamRetry > now ? upstreamRetry : now + (exhausted ? 86_400_000 : 60_000);
+        cooldown = { failure, until };
+        for (const [key, entry] of providerKeyCooldowns) {
+          if (entry.until <= now) providerKeyCooldowns.delete(key);
+        }
+        providerKeyCooldowns.set(id, cooldown);
+      }
+    }
+    if (!earliest || cooldown.until < earliest.until) earliest = cooldown;
+  }
+  if (!earliest) return operation(credential);
+  throw new ProviderContractError({
+    code: earliest.failure.code,
+    retryable: earliest.failure.retryable,
+    retryAfterAt: new Date(earliest.until).toISOString(),
+    publicMessage: "该数据源的可用 Key 均已达到配额或频率限制",
+    httpStatus: earliest.failure.httpStatus,
+    phase: context.operation
+  });
+}
+
 async function runLogged<T>(
   input: RuntimeBase,
   endpointCode: string,
@@ -303,7 +353,7 @@ async function runLogged<T>(
       endpointCode
     }, async () => {
       try {
-        return await operation(validateRuntime(input));
+        return await runWithProviderKeys(input, operation);
       } catch (error) {
         const normalized = providerErrorFromUnknown(error, input.context.operation);
         recordProviderHttpResultIfEmpty({

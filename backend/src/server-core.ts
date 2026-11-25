@@ -1,3 +1,4 @@
+import { currentAiModelConfig, listAiModelConfigs } from "./ai-model-selection.js";
 /**
  * GoodJob CRM API 共享内核：应用实例、全局中间件与权限闸、跨模块共享的辅助函数与运行时状态。
  * 各业务路由在 routes/*.ts，由 server.ts 按原顺序注册。
@@ -123,6 +124,7 @@ import { type OutboundEmailLog, type OutreachSequence, type OutreachSequenceStep
 import "./customer-maintenance.js"; // 保持模块加载顺序与拆分前一致
 import { controlCustomerMaintenanceWatch, createCustomerMaintenanceWatch, CustomerMaintenanceRunner, listCustomerMaintenanceWatches, previewCustomerMaintenance } from "./customer-maintenance.js";
 import "./credential-security.js"; // 保持模块加载顺序与拆分前一致
+import { providerApiKeys, providerKeyId, supportsProviderKeyPool } from "./provider-key-pool.js";
 import { decryptProviderConfiguration, validateProviderCredentialSecurity } from "./credential-security.js";
 import "./market-analysis-runs.js"; // 保持模块加载顺序与拆分前一致
 import { createMysqlStore } from "./mysql-store.js";
@@ -6254,6 +6256,11 @@ function providerStatusFor(user: SessionUser, provider: LeadProvider) {
   return {
     ...meta,
     hasApiKey: Boolean(configuration.apiKey),
+    supportsMultipleKeys: supportsProviderKeyPool(provider),
+    apiKeys: connection ? providerApiKeys(configuration).map((key) => ({
+      id: providerKeyId(connection, key),
+      suffix: provider.id !== "sec_edgar" && key.length >= 8 ? key.slice(-4) : ""
+    })) : [],
     ready: automated ? hasKey : true,
     enabled: catalogEnabled && connectionEnabled,
     lastTestStatus: connection && !connectionRead.readable
@@ -6269,10 +6276,8 @@ function providerStatusFor(user: SessionUser, provider: LeadProvider) {
 
 // AI 搜索作为一种数据源：不需要独立 API Key，直接复用「AI 模型配置」里已启用且勾选自动获客的模型
 export function aiSearchStatus(user: SessionUser) {
-  const configured = getAiConfigs(user).find((item) =>
-    item.enabled && Boolean(item.apiKey)
-  );
-  const config = getAiConfig(user, "leadFinder");
+  const configured = getAiConfig(user);
+  const config = configured?.useLeadFinder ? configured : null;
   const externalWebsiteProviders = LEAD_PROVIDERS
     .filter((provider) => ["brave", "serper", "serpapi", "google_places"].includes(provider.id))
     .map((provider) => providerStatusFor(user, provider))
@@ -6717,9 +6722,7 @@ function localMinuteText(date: Date) {
 type AiUseCase = "leadFinder" | "websiteParse" | "scoring" | "emailDraft" | "exam";
 
 export function getAiConfigs(user: SessionUser) {
-  return getStore().aiModelConfigs
-    .filter((item) => item.ownerId === user.id)
-    .sort((left, right) => Number(right.enabled) - Number(left.enabled) || new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  return listAiModelConfigs(getStore(), user.id, user.teamId);
 }
 
 export function configSupportsUseCase(config: AiModelConfig, useCase?: AiUseCase) {
@@ -6735,11 +6738,8 @@ export function configSupportsUseCase(config: AiModelConfig, useCase?: AiUseCase
 }
 
 export function getAiConfig(user: SessionUser, useCase?: AiUseCase) {
-  const configs = getAiConfigs(user);
-  return configs.find((item) => item.enabled && item.apiKey && configSupportsUseCase(item, useCase))
-    || configs.find((item) => configSupportsUseCase(item, useCase))
-    || configs[0]
-    || null;
+  const current = currentAiModelConfig(getStore(), user.id, user.teamId);
+  return current && configSupportsUseCase(current, useCase) ? current : null;
 }
 
 export function websiteContactAiExtractor(user: SessionUser): WebsiteContactAiExtractor | undefined {

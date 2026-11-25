@@ -2121,6 +2121,8 @@ export interface LeadProviderStatus {
   costNote: string;
   accessMode: "api" | "bulk_file" | "website_controlled" | "manual_assisted" | "disabled";
   recommended: boolean;
+  supportsMultipleKeys?: boolean;
+  apiKeys?: Array<{ id: string; suffix: string }>;
   hasApiKey: boolean;
   ready: boolean;
   enabled: boolean;

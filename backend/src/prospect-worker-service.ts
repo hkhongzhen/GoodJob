@@ -1,3 +1,4 @@
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { randomBytes } from "node:crypto";
 import { createAiSearchProvider } from "./ai-search-provider.js";
 import { callAiModelWithWebSearch } from "./ai-model-runtime.js";
@@ -79,23 +80,10 @@ export class ProspectWorkerService {
         store: this.store,
         resolveProvider: (request) => {
           if (request.providerCode !== "ai_search") return undefined;
-          const config = this.store.aiModelConfigs
-            .filter((item) =>
-              item.teamId === request.teamId
-              && item.ownerId === request.ownerId
-              && item.enabled
-              && item.useLeadFinder
-              && Boolean(item.apiKey)
-              && aiLeadFinderReadiness(
-                item,
-                externalWebsiteSearchReady(request.teamId, request.ownerId)
-              ).ready
-            )
-            .sort((left, right) =>
-              new Date(right.updatedAt).getTime()
-              - new Date(left.updatedAt).getTime()
-            )[0];
-          return config
+          const config = currentAiModelConfig(this.store, request.ownerId, request.teamId);
+          return config?.useLeadFinder && aiLeadFinderReadiness(
+            config, externalWebsiteSearchReady(request.teamId, request.ownerId)
+          ).ready
             ? {
                 provider: createAiSearchProvider(config),
                 credential: {
@@ -120,32 +108,9 @@ export class ProspectWorkerService {
       websiteDiscoverySearch: async ({ candidate, runId, query }) => {
         let lastFailure: unknown;
         let lastFailedProvider = "";
-        const aiConfig = this.store.aiModelConfigs
-          .filter((item) =>
-            item.teamId === candidate.teamId
-            && item.ownerId === candidate.ownerId
-            && item.enabled
-            && item.useLeadFinder
-            && item.protocol === "openai-compatible"
-            && Boolean(item.apiKey)
-            && aiWebSearchPolicy(item).ready
-          )
-          .sort((left, right) =>
-            new Date(right.updatedAt).getTime()
-            - new Date(left.updatedAt).getTime()
-          )[0];
-        const configuredAi = this.store.aiModelConfigs
-          .filter((item) =>
-            item.teamId === candidate.teamId
-            && item.ownerId === candidate.ownerId
-            && item.enabled
-            && item.useLeadFinder
-            && Boolean(item.apiKey)
-          )
-          .sort((left, right) =>
-            new Date(right.updatedAt).getTime()
-            - new Date(left.updatedAt).getTime()
-          )[0];
+        const current = currentAiModelConfig(this.store, candidate.ownerId, candidate.teamId);
+        const configuredAi = current?.useLeadFinder ? current : undefined;
+        const aiConfig = configuredAi && aiWebSearchPolicy(configuredAi).ready ? configuredAi : undefined;
         const aiWebSearchBlockReason = configuredAi && !aiWebSearchPolicy(configuredAi).ready
           ? aiWebSearchPolicy(configuredAi).message
           : "";

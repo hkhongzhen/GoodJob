@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { agentModelCandidates, agentModelMetrics, callGovernedAgentModel, runAgentEvaluationSuite } from "./agent-model-governance.js";
+import { agentModelMetrics, callGovernedAgentModel, runAgentEvaluationSuite } from "./agent-model-governance.js";
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { AgentBackgroundRunner, createAgentPlan, getAgentRun } from "./ai-agent.js";
 import { memoryStore, type CrmStore } from "./store.js";
 import type { AiModelConfig } from "./types.js";
@@ -31,37 +32,43 @@ async function main() {
   const primary = config("model-primary", "primary-model", "2026-07-20T02:00:00.000Z");
   const fallback = config("model-fallback", "fallback-model", "2026-07-20T01:00:00.000Z");
   store.aiModelConfigs = [primary, fallback];
-  assert.deepEqual(agentModelCandidates(store, actor, "planning", primary).map((item) => item.id), [primary.id, fallback.id]);
-  assert.equal(agentModelCandidates(store, other, "planning").length, 0);
+  assert.equal(currentAiModelConfig(store, actor.id, actor.teamId)?.id, primary.id);
+  assert.equal(currentAiModelConfig(store, other.id, other.teamId), undefined);
 
   const requested: string[] = [];
-  const content = await callGovernedAgentModel({
-    store,
-    actor,
-    runId: "mission-routing-test",
-    purpose: "planning",
-    preferred: primary,
-    prompt: "只返回 JSON",
-    maxInputChars: 2_000,
+  const call = {
+    store, actor, runId: "mission-routing-test", purpose: "planning" as const,
+    preferred: primary, prompt: "只返回 JSON", maxInputChars: 2_000
+  };
+  await assert.rejects(() => callGovernedAgentModel({
+    ...call,
     fetcher: async (url) => {
       requested.push(url);
-      if (url.includes("model-primary")) return new Response(JSON.stringify({ error: { message: "primary unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
-      return new Response(JSON.stringify({ choices: [{ message: { content: "{\"ok\":true}" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: { message: "primary unavailable" } }), {
+        status: 503, headers: { "content-type": "application/json" }
+      });
     }
+  }));
+  assert.equal(requested.length, 1);
+  assert.match(requested[0]!, /model-primary/);
+  assert.equal(store.agentModelCalls[0]?.success, false);
+
+  const content = await callGovernedAgentModel({
+    ...call,
+    fetcher: async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+      status: 200, headers: { "content-type": "application/json" }
+    })
   });
-  assert.equal(content, "{\"ok\":true}");
-  assert.equal(requested.length, 2);
-  assert.equal(store.agentModelCalls.length, 2);
+  assert.equal(content, '{"ok":true}');
   assert.equal(store.agentModelCalls[0]?.success, true);
-  assert.equal(store.agentModelCalls[0]?.routeIndex, 1);
-  assert.equal(store.agentModelCalls[1]?.success, false);
+  assert.equal(store.agentModelCalls[0]?.routeIndex, 0);
   assert.ok(store.agentModelCalls[0]!.inputTokens > 0);
   assert.ok(store.agentModelCalls[0]!.estimatedCostUsd > 0);
 
   const metrics = agentModelMetrics(store, actor);
   assert.equal(metrics.last24Hours.calls, 2);
   assert.equal(metrics.last24Hours.successes, 1);
-  assert.equal(metrics.last24Hours.fallbackCalls, 1);
+  assert.equal(metrics.last24Hours.fallbackCalls, 0);
   assert.equal(agentModelMetrics(store, other).last24Hours.calls, 0);
 
   setProviderHttpTestTransport(async () => new Response(JSON.stringify({
@@ -219,7 +226,7 @@ async function main() {
   budgetStore.agentModelCalls.push({ id: "spent", runId: "other", ownerId: actor.id, teamId: actor.teamId, purpose: "planning", configId: primary.id, provider: primary.provider, model: primary.model, routeIndex: 0, success: true, inputTokens: 1, outputTokens: 1, estimatedCostUsd: 10, latencyMs: 1, error: "", createdAt: new Date().toISOString() });
   await assert.rejects(() => callGovernedAgentModel({ store: budgetStore, actor, runId: "budget-test", purpose: "planning", preferred: primary, prompt: "test", maxInputChars: 100, fetcher: async () => new Response("{}") }), /预算已用尽/u);
 
-  console.log(JSON.stringify({ ok: true, purposeRouting: true, aiPlanningPriority: true, catalogFirstClosedLoop: true, authorizedInternalCreate: true, completionEvidenceGate: true, evaluationEvidenceFallback: true, fallback: true, callAudit: true, tokenCostEstimate: true, accountIsolation: true, budgetGuard: true, fixedSafetySuite: true }, null, 2));
+  console.log(JSON.stringify({ ok: true, singleCurrentModel: true, aiPlanningPriority: true, catalogFirstClosedLoop: true, authorizedInternalCreate: true, completionEvidenceGate: true, evaluationEvidenceFallback: true, callAudit: true, tokenCostEstimate: true, accountIsolation: true, budgetGuard: true, fixedSafetySuite: true }, null, 2));
 }
 
 void main();

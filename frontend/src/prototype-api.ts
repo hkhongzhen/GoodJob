@@ -32,7 +32,7 @@ import {
   prospectRadarController, prospectRequestId, prospectResearchRunning, prospectStatusMeta, renderProspectDetail,
   renderProspectMailPreview, renderSuperAiDiscoveryOption, renderSuperMapSearchOption, renderSuperSearchPreview,
   renderSuperWebSearchOption, renderWebsiteOpportunities, requestProspectExclusion, researchRunningBadgeHtml,
-  scrollLeadFinderLiveToLatest, selectedProspect, selectedSuperWebProviderIds, sendProspectDevelopmentEmail,
+  scrollLeadFinderLiveToLatest, selectedProspect, sendProspectDevelopmentEmail,
   leadSearchRoute, leadSearchRouteFrom, setLeadFinderMode, startContactEnrichment, superAiDiscoveryMode, superMapProviders, superMapSearchMode,
   superWebProviders, superWebSearchMode, syncLeadFinderStartState, syncSelectedProspects, toggleSuperAiDiscovery,
   toggleSuperMapSearch, toggleSuperWebSearch, updateProspectBatch, websiteContactDisplay, websiteDomain
@@ -65,7 +65,7 @@ import {
 } from "./modules/development-email";
 import {
   aiEngineSourceHint, awaitAiEngineJob, effectiveResearchSource, ensureAiEngineSettings, loadAiEngineSettings,
-  renderTeamSystemSettings, saveAiEngineSettings, stopCliWaitTicker
+  renderAiEngineSettings, renderTeamSystemSettings, saveAiEngineSettings, stopCliWaitTicker
 } from "./modules/ai-engine-settings";
 import { openWhatsAppCustomerPicker, refreshWhatsAppWorkspace, renderWhatsAppThreads, syncWhatsAppRefresh } from "./modules/whatsapp";
 import {
@@ -81,8 +81,8 @@ import {
 import { loadAccessControl, loadTrialAccounts } from "./modules/access-control";
 import { refreshApprovalCenter, refreshApprovalWorkflows, refreshPlatformOperations, setupApprovalEvents } from "./modules/platform-approvals";
 import {
-  applyAiProviderPreset, deleteAiConfig, loadOcrCard, newAiConfigDraft, recognizeOcrImage, removeOcrCard,
-  saveAiConfig, testAiConfig, toggleAiConfigEnabled
+  bindAiBaseUrlSuggestions, deleteAiConfig, loadOcrCard, newAiConfigDraft, recognizeOcrImage, removeOcrCard,
+  saveAiConfig, toggleAiConfigEnabled
 } from "./modules/tools";
 import { bindMaintenanceCenterEvents, loadMaintenanceCenter } from "./modules/maintenance-center";
 import {
@@ -152,7 +152,7 @@ import { renderGlobalMap, renderKpiBoard, renderRelationGraph, stopGmTimeline } 
 import { loadLogs, openLogDrawer } from "./modules/logs";
 import {
   type CliAcquirePayload, canSelectLeadFinderItem, createLeadFinderTodos, exportLeadFinderRows, leadFinderValues,
-  leadSourceBlockedMessage, loadCliAcquireHistory, openCliAcquireModal, openLeadSourceCenter,
+  type AiLeadSourceScope, leadSourceBlockedMessage, loadCliAcquireHistory, openCliAcquireModal, openLeadSourceCenter, showAiLeadSources,
   registerWebsiteReferences, renderLeadFinder, upsertCliAcquireStore
 } from "./modules/lead-sources";
 import {
@@ -811,7 +811,6 @@ async function loadTeamSystemSettings() {
   teamSystemSettings = result.settings;
   tradeDocumentOcrProvider = result.ocr;
   teamSystemSettingsCanManage = result.canManage;
-  await loadAiEngineSettings().catch(() => undefined);
   renderTeamSystemSettings();
   return result.settings;
 }
@@ -2440,7 +2439,7 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       const selectedWebSources = sources.filter((providerId) => webIds.has(providerId));
       if (superWebSearchMode() === "api" && !selectedWebSources.length) {
         renderSuperWebSearchOption();
-        openLeadSourceCenter(superWebProviders()[0]?.id);
+        openAiSettings("sources", { kind: "web" });
         toast("实时网页搜索尚无可用来源，请先完成配置", "error");
         return;
       }
@@ -2461,10 +2460,8 @@ async function runLeadFinder(button?: HTMLButtonElement) {
       const selectedAiSources = sources.filter((providerId) => providerId === "ai_search");
       if (superAiDiscoveryMode() === "model" && !selectedAiSources.length) {
         renderSuperAiDiscoveryOption();
-        activateNavView("ai-config", () => {
-          qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
-          toast("AI 深度发现尚无可用模型，请先完成配置", "error");
-        });
+        openAiSettings("model");
+        toast("AI 深度发现尚无可用模型，请先完成配置", "error");
         return;
       }
       if (superAiDiscoveryMode() === "off") {
@@ -3265,8 +3262,6 @@ function installEvents() {
     qs<HTMLElement>(selector)?.addEventListener("change", () => renderQuestionBankRows(state.examQuestions));
   });
   qs<HTMLButtonElement>("#wecom .page-head .btn.primary")?.addEventListener("click", () => void syncWecomMessages());
-  qs<HTMLButtonElement>("#aiSaveButton")?.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
-  qs<HTMLButtonElement>("#aiTestButton")?.addEventListener("click", (event) => void testAiConfig(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#agentPlanButton")?.addEventListener("click", () => void createAgentPlan());
   qs<HTMLTextAreaElement>("#agentGoalInput")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -3464,7 +3459,7 @@ function installEvents() {
     void toggleSuperWebSearch((event.currentTarget as HTMLInputElement).checked);
   });
   qs<HTMLButtonElement>("#leadSuperWebConfig")?.addEventListener("click", () => {
-    openLeadSourceCenter(selectedSuperWebProviderIds()[0] || superWebProviders()[0]?.id);
+    openAiSettings("sources", { kind: "web" });
   });
   qs<HTMLInputElement>("#leadSuperMapSearch")?.addEventListener("change", (event) => {
     void toggleSuperMapSearch((event.currentTarget as HTMLInputElement).checked);
@@ -3475,12 +3470,7 @@ function installEvents() {
   qs<HTMLInputElement>("#leadSuperAiDiscovery")?.addEventListener("change", (event) => {
     void toggleSuperAiDiscovery((event.currentTarget as HTMLInputElement).checked);
   });
-  qs<HTMLButtonElement>("#leadSuperAiConfig")?.addEventListener("click", () => {
-    activateNavView("ai-config", () => {
-      qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
-      toast("已打开 AI 模型配置");
-    });
-  });
+  qs<HTMLButtonElement>("#leadSuperAiConfig")?.addEventListener("click", () => openAiSettings("model"));
   qsa<HTMLButtonElement>(".lead-entry-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
       chip.classList.toggle("active");
@@ -3698,10 +3688,7 @@ function installEvents() {
   qs<HTMLButtonElement>("#leadFinderSyncButtonSide")?.addEventListener("click", (event) => void shortlistLeadFinderRows(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderTodoButtonSide")?.addEventListener("click", (event) => void createLeadFinderTodos(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#leadFinderExportButtonSide")?.addEventListener("click", exportLeadFinderRows);
-  qs<HTMLButtonElement>("#leadFinderAiConfigButtonSide")?.addEventListener("click", () => activateNavView("ai-config", () => {
-    qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
-    toast("已打开 AI 模型配置");
-  }));
+  qs<HTMLButtonElement>("#leadFinderAiConfigButtonSide")?.addEventListener("click", () => openAiSettings("model"));
   qsa<HTMLButtonElement>("[data-lead-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       state.leadFinderFilter = (button.dataset.leadFilter || "all") as AppState["leadFinderFilter"];
@@ -3717,10 +3704,7 @@ function installEvents() {
     state.leadFinderPage += 1;
     renderLeadFinder(state.websiteOpportunities);
   });
-  qs<HTMLButtonElement>("#leadFinderAiConfigButton")?.addEventListener("click", () => activateNavView("ai-config", () => {
-    qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
-    toast("已打开 AI 模型配置，保存后回到智能搜客即可启用 AI 解析");
-  }));
+  qs<HTMLButtonElement>("#leadFinderAiConfigButton")?.addEventListener("click", () => openAiSettings("model"));
   qs<HTMLInputElement>("#prospectSearchInput")?.addEventListener("input", () => {
     state.prospectPage = 1;
     renderProspectList();
@@ -3825,21 +3809,16 @@ function installEvents() {
     state.prospectPage = 1;
     renderProspectList();
   });
-  qsa<HTMLButtonElement>("#gptSaveButton, #gptSaveButtonTop").forEach((button) => {
-    button.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
-  });
-  qsa<HTMLButtonElement>("#gptTestButton, #gptTestButtonTop").forEach((button) => {
-    button.addEventListener("click", (event) => void testAiConfig(event.currentTarget as HTMLButtonElement));
-  });
-  qs<HTMLButtonElement>("#aiNewConfigButton")?.addEventListener("click", () => newAiConfigDraft(qs<HTMLSelectElement>("#gptProviderSelect")?.value || "openai"));
+  qs<HTMLButtonElement>("#gptSaveButton")?.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement));
+  qs<HTMLButtonElement>("#gptTestButton")?.addEventListener("click", (event) => void saveAiConfig(event.currentTarget as HTMLButtonElement, true));
+  qs<HTMLButtonElement>("#aiNewConfigButton")?.addEventListener("click", newAiConfigDraft);
   qs<HTMLButtonElement>("#aiToggleEnabledButton")?.addEventListener("click", (event) => void toggleAiConfigEnabled(event.currentTarget as HTMLButtonElement));
   qs<HTMLButtonElement>("#aiDeleteConfigButton")?.addEventListener("click", (event) => void deleteAiConfig(event.currentTarget as HTMLButtonElement));
-  qsa<HTMLElement>("[data-ai-provider]").forEach((button) => {
-    button.addEventListener("click", () => applyAiProviderPreset(button.dataset.aiProvider || "custom"));
+  bindAiBaseUrlSuggestions();
+  qsa<HTMLButtonElement>("[data-ai-settings-tab]").forEach((button) => {
+    button.addEventListener("click", () => showAiSettingsPanel(button.dataset.aiSettingsTab as AiSettingsPanel));
   });
-  qs<HTMLSelectElement>("#gptProviderSelect")?.addEventListener("change", (event) => {
-    applyAiProviderPreset((event.currentTarget as HTMLSelectElement).value);
-  });
+  qs<HTMLButtonElement>("#aiShowAllSources")?.addEventListener("click", () => showAiSettingsPanel("sources"));
   qs<HTMLButtonElement>("#gptRevealKeyButton")?.addEventListener("click", (event) => {
     const input = qs<HTMLInputElement>("#gptApiKeyInput");
     if (!input) return;
@@ -4296,7 +4275,31 @@ if (!mcComposeDraftFlushBound) {
   window.addEventListener("beforeunload", mcComposeDraftSaveNow);
 }
 
-export function activateNavView(view: string, after?: () => void) {
+type AiSettingsPanel = "model" | "sources" | "verification" | "engine";
+
+function showAiSettingsPanel(panel: AiSettingsPanel, scope?: AiLeadSourceScope) {
+  qsa<HTMLButtonElement>("[data-ai-settings-tab]").forEach((button) => {
+    const selected = button.dataset.aiSettingsTab === panel;
+    button.classList.toggle("primary", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  qsa<HTMLElement>("[data-ai-settings-panel]").forEach((section) => {
+    section.hidden = section.dataset.aiSettingsPanel !== panel;
+  });
+  if (panel === "sources") showAiLeadSources(scope);
+  if (panel === "verification") void loadEmailVerificationConfig(isSystemAdministrator());
+  if (panel === "engine") {
+    void loadAiEngineSettings()
+      .then(renderAiEngineSettings)
+      .catch((error) => toast(error instanceof Error ? error.message : "执行来源加载失败", "error"));
+  }
+}
+
+export function openAiSettings(panel: AiSettingsPanel, scope?: AiLeadSourceScope) {
+  activateNavView("ai-config", undefined, { panel, scope });
+}
+
+export function activateNavView(view: string, after?: () => void, aiSettings?: { panel: AiSettingsPanel; scope?: AiLeadSourceScope }) {
   // 刷新后可能恢复到详情页，但没有订单 id：直接退回列表，避免空白页
   if (view === "order-detail" && !qs<HTMLElement>("#order-detail")?.dataset.orderId) {
     view = "orders";
@@ -4361,6 +4364,7 @@ export function activateNavView(view: string, after?: () => void) {
   syncLeadTaskDetailClock(view === "lead-task-detail");
   syncWhatsAppRefresh(false);
   renderTopbarForView(view);
+  if (view === "ai-config") showAiSettingsPanel(aiSettings?.panel || "model", aiSettings?.scope);
   if (view === "customers") {
     renderCustomers(state.customers);
   }
@@ -4450,7 +4454,6 @@ export function activateNavView(view: string, after?: () => void) {
     void loadSenderMailboxes();
     void loadEmailTrackingConfig();
     void loadBounceGuardConfig();
-    void loadEmailVerificationConfig();
   }
   if (view === "sales-skill-center") {
     void loadSalesSkillCenter();

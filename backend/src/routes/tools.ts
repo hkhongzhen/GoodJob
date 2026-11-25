@@ -18,6 +18,7 @@ import { callAiModel, callAiModelWithWebSearch } from "../ai-model-runtime.js";
 import { aiWebSearchPolicy } from "../ai-web-search-policy.js";
 import { type AiModelConfig, type LogEntry, type OcrJob, type Order, type Product, type SessionUser, type Shipment, type ShipmentItem, type TeamSystemSettings } from "../types.js";
 import { getStore } from "../store.js";
+import { createSerializedTaskQueue } from "../mysql-store.js";
 import { providerErrorFromUnknown } from "../provider-contract.js";
 import { syncOrderFulfillment } from "../order-service.js";
 import { recognizeTrackingCode } from "../shipment-ocr.js";
@@ -256,6 +257,37 @@ function publicAiConfig(config: AiModelConfig) {
     teamId: config.teamId,
     updatedAt: config.updatedAt
   };
+}
+
+const writeAiConfig = createSerializedTaskQueue();
+
+function aiConfigListView(user: SessionUser) {
+  const current = getAiConfig(user);
+  return {
+    currentConfig: current ? publicAiConfig(current) : null,
+    configs: getAiConfigs(user).map((item) => publicAiConfig({ ...item, enabled: item.id === current?.id }))
+  };
+}
+
+function setCurrentAiConfig(user: SessionUser, id: string | null) {
+  const store = getStore();
+  store.aiModelConfigs = store.aiModelConfigs.map((item) => {
+    if (item.ownerId !== user.id || item.teamId !== user.teamId) return item;
+    const enabled = item.id === id;
+    return item.enabled === enabled ? item : { ...item, enabled };
+  });
+}
+
+async function persistAiConfigChanges(change: () => void) {
+  const store = getStore();
+  const previous = [...store.aiModelConfigs];
+  change();
+  try {
+    await store.persist();
+  } catch (error) {
+    store.aiModelConfigs = previous;
+    throw error;
+  }
 }
 
 async function testAiConfig(config: AiModelConfig) {
@@ -601,9 +633,8 @@ export function registerToolsRoutes(app: Express) {
   }));
 
   app.get("/api/tools/ai-config", requireAuth, (req, res) => {
-    const configs = getAiConfigs(req.user!);
-    const config = getAiConfig(req.user!);
-    res.json({ config: config ? publicAiConfig(config) : null, configs: configs.map(publicAiConfig) });
+    const { currentConfig, configs } = aiConfigListView(req.user!);
+    res.json({ config: currentConfig, configs });
   });
 
   app.post("/api/tools/ai-config", requireAuth, asyncRoute(async (req, res) => {
@@ -615,7 +646,7 @@ export function registerToolsRoutes(app: Express) {
       baseUrl: z.string().url(),
       model: z.string().min(1),
       apiKey: z.string().optional().default(""),
-      enabled: z.boolean().default(false),
+      enabled: z.boolean().optional(),
       temperature: z.number().min(0).max(2).default(0.1),
       useLeadFinder: z.boolean().default(true),
       useWebsiteParse: z.boolean().default(true),
@@ -631,64 +662,93 @@ export function registerToolsRoutes(app: Express) {
       res.status(400).json({ message: "AI Base URL 必须是公网 HTTPS 标准端口地址，且不能包含账号、查询参数或片段" });
       return;
     }
-    const store = getStore();
-    const existing = body.id ? store.aiModelConfigs.find((item) => item.id === body.id && item.ownerId === req.user!.id) : undefined;
-    const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
-    if (body.enabled && !apiKey) {
-      res.status(400).json({ message: "启用配置前必须填写 API Key" });
-      return;
-    }
-    const config: AiModelConfig = {
-      id: existing?.id || body.id || `ai_${req.user!.id}_${Date.now()}`,
-      provider: body.provider,
-      protocol: body.protocol,
-      name: body.name,
-      baseUrl,
-      model: body.model,
-      apiKey,
-      enabled: body.enabled,
-      temperature: body.temperature,
-      useLeadFinder: body.useLeadFinder,
-      useWebsiteParse: body.useWebsiteParse,
-      useScoring: body.useScoring,
-      useEmailDraft: body.useEmailDraft,
-      useExam: body.useExam,
-      lastTestAt: existing?.lastTestAt,
-      lastTestStatus: existing?.lastTestStatus || "untested",
-      lastTestMessage: existing?.lastTestMessage || "",
-      webSearchStatus: existing
+    await writeAiConfig(async () => {
+      const user = req.user!;
+      const store = getStore();
+      const existing = body.id ? getAiConfigs(user).find((item) => item.id === body.id) : undefined;
+      if (body.id && !existing) {
+        res.status(404).json({ message: "配置不存在或无权修改" });
+        return;
+      }
+      const current = getAiConfig(user);
+      const enabled = body.enabled ?? Boolean(existing && existing.id === current?.id);
+      const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existing?.apiKey || "";
+      if (enabled && !apiKey) {
+        res.status(400).json({ message: "启用配置前必须填写 API Key" });
+        return;
+      }
+      const connectionUnchanged = existing
+        && existing.apiKey === apiKey
         && existing.provider === body.provider
-        && existing.protocol === body.protocol
+        && (existing.protocol || "openai-compatible") === body.protocol
         && existing.baseUrl === baseUrl
         && existing.model === body.model
-        && existing.apiKey === apiKey
-        ? existing.webSearchStatus || "untested"
-        : "untested",
-      webSearchTestAt: existing?.webSearchTestAt,
-      webSearchTestMessage: existing?.webSearchTestMessage || "",
-      webSearchCitationCount: existing?.webSearchCitationCount || 0,
-      ownerId: req.user!.id,
-      teamId: req.user!.teamId,
-      updatedAt: new Date().toISOString()
-    };
-    if (existing) Object.assign(existing, config);
-    else store.aiModelConfigs.unshift(config);
-    await store.persist();
-    res.json({ config: publicAiConfig(config), configs: getAiConfigs(req.user!).map(publicAiConfig) });
+        && (existing.temperature ?? 0.1) === body.temperature;
+      const webSearchUnchanged = connectionUnchanged && existing.useLeadFinder === body.useLeadFinder;
+      const config: AiModelConfig = {
+        ...body,
+        enabled,
+        id: existing?.id || `ai_${randomUUID()}`,
+        baseUrl,
+        apiKey,
+        lastTestAt: connectionUnchanged ? existing.lastTestAt : undefined,
+        lastTestStatus: connectionUnchanged ? existing.lastTestStatus : "untested",
+        lastTestMessage: connectionUnchanged ? existing.lastTestMessage : "",
+        webSearchStatus: webSearchUnchanged ? existing.webSearchStatus : "untested",
+        webSearchTestAt: webSearchUnchanged ? existing.webSearchTestAt : undefined,
+        webSearchTestMessage: webSearchUnchanged ? existing.webSearchTestMessage : "",
+        webSearchCitationCount: webSearchUnchanged ? existing.webSearchCitationCount : 0,
+        ownerId: user.id,
+        teamId: user.teamId,
+        updatedAt: new Date().toISOString()
+      };
+      await persistAiConfigChanges(() => {
+        if (existing) store.aiModelConfigs = store.aiModelConfigs.map((item) => item === existing ? config : item);
+        else store.aiModelConfigs = [config, ...store.aiModelConfigs];
+        const currentId = enabled ? config.id : current?.id !== config.id ? current?.id : undefined;
+        setCurrentAiConfig(user, currentId || null);
+      });
+      res.json({ config: publicAiConfig(config), ...aiConfigListView(user) });
+    });
+  }));
+
+  app.put("/api/tools/ai-config/:id/current", requireAuth, asyncRoute(async (req, res) => {
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(req.body);
+    await writeAiConfig(async () => {
+      const user = req.user!;
+      const config = getAiConfigs(user).find((item) => item.id === req.params.id);
+      if (!config) {
+        res.status(404).json({ message: "配置不存在或无权修改" });
+        return;
+      }
+      if (enabled && !config.apiKey) {
+        res.status(400).json({ message: "请先填写并保存 API Key" });
+        return;
+      }
+      const current = getAiConfig(user);
+      const nextId = enabled ? config.id : current?.id !== config.id ? current?.id : undefined;
+      await persistAiConfigChanges(() => setCurrentAiConfig(user, nextId || null));
+      res.json({ config: publicAiConfig({ ...config, enabled: config.id === nextId }), ...aiConfigListView(user) });
+    });
   }));
 
   app.delete("/api/tools/ai-config/:id", requireAuth, asyncRoute(async (req, res) => {
-    const store = getStore();
-    const index = store.aiModelConfigs.findIndex((item) => item.id === req.params.id && item.ownerId === req.user!.id);
-    if (index < 0) {
-      res.status(404).json({ message: "配置不存在或无权删除" });
-      return;
-    }
-    store.aiModelConfigs.splice(index, 1);
-    const config = getAiConfig(req.user!);
-    res.json({ config: config ? publicAiConfig(config) : null, configs: getAiConfigs(req.user!).map(publicAiConfig) });
-    // 持久化在后台进行，不阻塞删除响应（全量快照写入较慢）
-    void store.persist().catch((err) => console.error("ai-config delete persist failed:", err));
+    await writeAiConfig(async () => {
+      const user = req.user!;
+      const store = getStore();
+      const config = getAiConfigs(user).find((item) => item.id === req.params.id);
+      if (!config) {
+        res.status(404).json({ message: "配置不存在或无权删除" });
+        return;
+      }
+      const current = getAiConfig(user);
+      await persistAiConfigChanges(() => {
+        store.aiModelConfigs = store.aiModelConfigs.filter((item) => item !== config);
+        setCurrentAiConfig(user, current?.id !== config.id ? current?.id || null : null);
+      });
+      const { currentConfig, configs } = aiConfigListView(user);
+      res.json({ config: currentConfig, configs });
+    });
   }));
 
   app.get("/api/tools/products", requireAuth, (req, res) => {
@@ -1172,7 +1232,7 @@ export function registerToolsRoutes(app: Express) {
     const schema = z.object({ id: z.string().min(1).max(64).optional() });
     const body = schema.parse(req.body || {});
     const config = body.id
-      ? getStore().aiModelConfigs.find((item) => item.id === body.id && item.ownerId === req.user!.id) || null
+      ? getAiConfigs(req.user!).find((item) => item.id === body.id) || null
       : getAiConfig(req.user!);
     if (!config || !config.baseUrl || !config.model) {
       res.status(400).json({ message: "请先保存模型地址和模型名称" });
@@ -1183,16 +1243,29 @@ export function registerToolsRoutes(app: Express) {
       return;
     }
     const result = await testAiConfig(config);
-    const testedAt = new Date().toISOString();
-    config.lastTestAt = testedAt;
-    config.lastTestStatus = result.ok ? "passed" : "failed";
-    config.lastTestMessage = result.message;
-    config.webSearchStatus = result.webSearchStatus;
-    config.webSearchTestAt = testedAt;
-    config.webSearchTestMessage = result.webSearchMessage;
-    config.webSearchCitationCount = result.webSearchCitationCount;
-    config.updatedAt = new Date().toISOString();
-    await getStore().persist();
-    res.json({ ok: result.ok, message: result.message, config: publicAiConfig(config), configs: getAiConfigs(req.user!).map(publicAiConfig) });
+    await writeAiConfig(async () => {
+      const user = req.user!;
+      const store = getStore();
+      const latest = getAiConfigs(user).find((item) => item.id === config.id);
+      if (!latest || latest.updatedAt !== config.updatedAt || latest.webSearchTestAt !== config.webSearchTestAt) {
+        res.status(409).json({ message: "测试期间配置已变更，请重新测试" });
+        return;
+      }
+      const testedAt = new Date().toISOString();
+      const tested: AiModelConfig = {
+        ...latest,
+        lastTestAt: testedAt,
+        lastTestStatus: result.ok ? "passed" : "failed",
+        lastTestMessage: result.message,
+        webSearchStatus: result.webSearchStatus,
+        webSearchTestAt: testedAt,
+        webSearchTestMessage: result.webSearchMessage,
+        webSearchCitationCount: result.webSearchCitationCount
+      };
+      await persistAiConfigChanges(() => {
+        store.aiModelConfigs = store.aiModelConfigs.map((item) => item === latest ? tested : item);
+      });
+      res.json({ ok: result.ok, message: result.message, config: publicAiConfig(tested), ...aiConfigListView(user) });
+    });
   }));
 }

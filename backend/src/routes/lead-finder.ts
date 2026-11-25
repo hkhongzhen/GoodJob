@@ -16,6 +16,8 @@ import { createAiSearchProvider } from "../ai-search-provider.js";
 import { type Customer, type ExtractedWebsiteContact, type Lead, type ProviderCatalogItem, type ProviderConnection, type ProviderEvidenceSnapshot, type SessionUser, type WebsiteOpportunity } from "../types.js";
 import { createCredentialRef, encryptProviderConfiguration } from "../credential-security.js";
 import { getLocalRunnerService } from "../integrations/integration-runtime.js";
+import { createSerializedTaskQueue } from "../mysql-store.js";
+import { MAX_PROVIDER_KEYS, providerApiKeys, providerKeyId, supportsProviderKeyPool } from "../provider-key-pool.js";
 import { getStore } from "../store.js";
 import { DEFAULT_LEAD_SEARCH_PROVIDER_IDS, getProvider, LEAD_PROVIDERS, type LeadQuery, type RawLead } from "../lead-providers.js";
 import { getTradeProvider } from "../trade-providers.js";
@@ -222,6 +224,28 @@ function recordProviderPreflightFailure(
     errorCode: errorCode.toLocaleLowerCase(),
     requestedAt
   });
+}
+
+const writeSourceConfig = createSerializedTaskQueue();
+
+async function persistSourceConnection(existing: ProviderConnection | undefined, next?: ProviderConnection) {
+  const store = getStore();
+  const previous = existing && { ...existing };
+  const index = existing ? store.providerConnections.indexOf(existing) : -1;
+  if (existing && next) Object.assign(existing, next);
+  else if (index >= 0) store.providerConnections.splice(index, 1);
+  else if (next) store.providerConnections.unshift(next);
+  try {
+    await store.persist();
+  } catch (error) {
+    if (existing && next) Object.assign(existing, previous);
+    else if (index >= 0 && existing) store.providerConnections.splice(index, 0, existing);
+    else if (next) {
+      const inserted = store.providerConnections.indexOf(next);
+      if (inserted >= 0) store.providerConnections.splice(inserted, 1);
+    }
+    throw error;
+  }
 }
 
 function providerConnectionConfiguration(connection?: ProviderConnection) {
@@ -1131,49 +1155,53 @@ export function registerLeadFinderRoutes(app: Express) {
       return;
     }
     if (body.baseUrl) assertProviderBaseUrlAllowed(body.baseUrl, provider.networkPolicy);
-    const store = getStore();
-    const existing = getProviderConnection(req.user!, body.provider);
-    const existingConfiguration = providerConnectionConfiguration(existing);
-    const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existingConfiguration.apiKey;
-    const baseUrl = provider.id === "us_census_trade"
-      ? ""
-      : body.baseUrl || existingConfiguration.baseUrl;
-    if (providerRequiresKey(provider, catalog) && body.enabled && !apiKey) {
-      res.status(400).json({
-        message: provider.id === "sec_edgar"
-          ? "启用前请填写 SEC Fair Access User-Agent（系统名 联系邮箱）"
-          : "启用前请先填写该数据源的 API Key"
-      });
-      return;
-    }
-    const now = new Date().toISOString();
-    const id = existing?.id || `pc_${provider.id}_${req.user!.id}_${Date.now()}`;
-    const context = { id, providerId: provider.id, ownerId: req.user!.id, teamId: req.user!.teamId };
-    const connection: ProviderConnection = {
-      ...context,
-      scope: "personal",
-      credentialRef: existing?.credentialRef || createCredentialRef(),
-      configurationEncrypted: encryptProviderConfiguration(context, { apiKey, baseUrl }),
-      status: body.enabled ? "active" : "disabled",
-      quotaPolicy: existing?.quotaPolicy || {},
-      budgetPolicy: existing?.budgetPolicy || {},
-      lastHealthAt: existing?.lastHealthAt || "",
-      lastHealthStatus: existing?.lastHealthStatus || "untested",
-      lastErrorCode: existing?.lastErrorCode || "",
-      lastHealthMessage: existing?.lastHealthMessage || "",
-      usage: existing?.usage || "",
-      createdBy: existing?.createdBy || req.user!.id,
-      createdAt: existing?.createdAt || now,
-      updatedAt: now
-    };
-    if (existing) Object.assign(existing, connection);
-    else store.providerConnections.unshift(connection);
-    await store.persist();
-    res.json({ config: publicLeadSourceConfig(connection), providers: allProviderStatuses(req.user!) });
+    await writeSourceConfig(async () => {
+      const existing = getProviderConnection(req.user!, body.provider);
+      const existingConfiguration = providerConnectionConfiguration(existing);
+      const apiKey = body.apiKey && !body.apiKey.includes("****") ? body.apiKey : existingConfiguration.apiKey;
+      const baseUrl = provider.id === "us_census_trade"
+        ? ""
+        : body.baseUrl || existingConfiguration.baseUrl;
+      if (providerRequiresKey(provider, catalog) && body.enabled && !apiKey) {
+        res.status(400).json({
+          message: provider.id === "sec_edgar"
+            ? "启用前请填写 SEC Fair Access User-Agent（系统名 联系邮箱）"
+            : "启用前请先填写该数据源的 API Key"
+        });
+        return;
+      }
+      const now = new Date().toISOString();
+      const id = existing?.id || `pc_${provider.id}_${req.user!.id}_${Date.now()}`;
+      const context = { id, providerId: provider.id, ownerId: req.user!.id, teamId: req.user!.teamId };
+      const connection: ProviderConnection = {
+        ...context,
+        scope: "personal",
+        credentialRef: existing?.credentialRef || createCredentialRef(),
+        configurationEncrypted: encryptProviderConfiguration(context, {
+          apiKey, baseUrl, backupApiKeys: providerApiKeys(existingConfiguration).slice(1).filter((key) => key !== apiKey)
+        }),
+        status: body.enabled ? "active" : "disabled",
+        quotaPolicy: existing?.quotaPolicy || {},
+        budgetPolicy: existing?.budgetPolicy || {},
+        lastHealthAt: existing?.lastHealthAt || "",
+        lastHealthStatus: existing?.lastHealthStatus || "untested",
+        lastErrorCode: existing?.lastErrorCode || "",
+        lastHealthMessage: existing?.lastHealthMessage || "",
+        usage: existing?.usage || "",
+        createdBy: existing?.createdBy || req.user!.id,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now
+      };
+      await persistSourceConnection(existing, connection);
+      res.json({ config: publicLeadSourceConfig(connection), providers: allProviderStatuses(req.user!) });
+    });
   }));
 
   app.post("/api/lead-finder/source-config/test", requireAuth, asyncRoute(async (req, res) => {
-    const schema = z.object({ provider: z.string().min(1).max(40) });
+    const schema = z.object({
+      provider: z.string().min(1).max(40),
+      apiKey: z.string().trim().max(400).optional().default("")
+    });
     const body = schema.parse(req.body);
     const provider = getConfigurableProvider(body.provider);
     if (!provider) {
@@ -1203,26 +1231,52 @@ export function registerLeadFinderRoutes(app: Express) {
     const connection = getProviderConnection(req.user!, provider.id);
     const connectionRead = readProviderConnectionConfiguration(connection);
     const configuration = connectionRead.configuration;
-    if (connection && !connectionRead.readable) {
+    if (connection && !connectionRead.readable && !body.apiKey) {
       res.status(409).json({
-        message: "连接凭据不可读取，请重新保存后再测试",
+        message: "连接凭据不可读取，请重新填写后再测试",
         errorCode: "PROVIDER_CONNECTION_INVALID",
         retryable: false,
         retryAfterAt: null
       });
       return;
     }
-    if (providerRequiresKey(provider, catalog) && !configuration.apiKey) {
+    const apiKey = body.apiKey || configuration.apiKey;
+    if (providerRequiresKey(provider, catalog) && !apiKey) {
       res.status(400).json({
-        message: provider.id === "sec_edgar"
-          ? "请先保存 SEC Fair Access User-Agent，再测试连接"
-          : "请先保存该数据源的 API Key，再测试连接",
-        errorCode: "PROVIDER_CONNECTION_INVALID",
-        retryable: false,
-        retryAfterAt: null
+        message: provider.id === "sec_edgar" ? "请先填写 SEC Fair Access User-Agent" : "请先填写该数据源的 API Key",
+        errorCode: "PROVIDER_CONNECTION_INVALID"
       });
       return;
     }
+    const multiKey = supportsProviderKeyPool(provider);
+    if (body.apiKey && multiKey && providerApiKeys(configuration).length >= MAX_PROVIDER_KEYS
+      && !providerApiKeys(configuration).includes(apiKey)) {
+      res.status(400).json({ message: `每个数据源最多保存 ${MAX_PROVIDER_KEYS} 个 API Key` });
+      return;
+    }
+    const now = new Date().toISOString();
+    const user = req.user!;
+    const probeContext = {
+      id: connection?.id || `pc_${randomUUID()}`, providerId: provider.id,
+      ownerId: user.id, teamId: user.teamId
+    };
+    const probeConnection: ProviderConnection | undefined = body.apiKey ? {
+      ...probeContext,
+      scope: "personal",
+      credentialRef: connection?.credentialRef || createCredentialRef(),
+      configurationEncrypted: encryptProviderConfiguration(probeContext, { apiKey, baseUrl: configuration.baseUrl }),
+      status: "active",
+      quotaPolicy: connection?.quotaPolicy || {},
+      budgetPolicy: connection?.budgetPolicy || {},
+      lastHealthAt: "",
+      lastHealthStatus: "untested",
+      lastErrorCode: "",
+      lastHealthMessage: "",
+      usage: "",
+      createdBy: connection?.createdBy || user.id,
+      createdAt: connection?.createdAt || now,
+      updatedAt: now
+    } : connection;
     const runId = `prun_test_${randomUUID()}`;
     let result: Awaited<ReturnType<typeof executeProviderHealth>>;
     let failure: ProviderContractError | null = null;
@@ -1238,8 +1292,8 @@ export function registerLeadFinderRoutes(app: Express) {
           operation: "health",
           purpose: "provider_connection_test"
         }),
-        connection,
-        credential: connection ? undefined : configuration,
+        connection: probeConnection,
+        credential: { apiKey, baseUrl: configuration.baseUrl },
         allowDisabledConnectionForHealth: true,
         onLogs: (logs) => store.providerRequestLogs.unshift(...logs)
       });
@@ -1250,40 +1304,82 @@ export function registerLeadFinderRoutes(app: Express) {
     const errorCode = result.ok ? "" : failure?.code || "PROVIDER_UNAVAILABLE";
     const retryable = result.ok ? false : failure?.retryable || false;
     const retryAfterAt = result.ok ? null : failure?.retryAfterAt || null;
-    if (connection) {
-      connection.lastHealthAt = new Date().toISOString();
-      connection.lastHealthStatus = result.ok ? "passed" : "failed";
-      connection.lastErrorCode = errorCode.toLocaleLowerCase();
-      connection.lastHealthMessage = result.message;
-      if (result.usage?.display) connection.usage = result.usage.display;
-      connection.updatedAt = new Date().toISOString();
-    }
-    await store.persist();
-    res.json({
-      ok: result.ok,
-      message: result.message,
-      usage: result.usage?.display || "",
-      errorCode,
-      retryable,
-      retryAfterAt,
-      providers: allProviderStatuses(req.user!)
+    await writeSourceConfig(async () => {
+      const latest = getProviderConnection(user, provider.id);
+      const latestRead = readProviderConnectionConfiguration(latest);
+      const keys = providerApiKeys(latestRead.configuration);
+      if (result.ok && body.apiKey && multiKey && keys.length >= MAX_PROVIDER_KEYS && !keys.includes(apiKey)) {
+        res.status(409).json({ message: `每个数据源最多保存 ${MAX_PROVIDER_KEYS} 个 API Key` });
+        return;
+      }
+      const testedExistingKey = latest && !body.apiKey && (!apiKey || keys.includes(apiKey));
+      const changedBaseUrl = latest && latestRead.configuration.baseUrl !== configuration.baseUrl;
+      if (result.ok && body.apiKey && changedBaseUrl) {
+        res.status(409).json({ message: "测试期间数据源地址已变更，请重新测试" });
+        return;
+      }
+
+      const saved = result.ok && Boolean(body.apiKey);
+      const target = latest || probeConnection;
+      if (target && (saved || (testedExistingKey && !changedBaseUrl))) {
+        const updatedAt = new Date().toISOString();
+        const savedKeys = multiKey ? [...new Set([...keys, apiKey])] : [apiKey];
+        const next: ProviderConnection = {
+          ...target,
+          ...(saved ? {
+            configurationEncrypted: encryptProviderConfiguration(target, {
+              apiKey: savedKeys[0] || "", baseUrl: configuration.baseUrl, backupApiKeys: savedKeys.slice(1)
+            })
+          } : {}),
+          status: result.ok ? "active" : target.status,
+          lastHealthAt: updatedAt,
+          lastHealthStatus: result.ok ? "passed" : "failed",
+          lastErrorCode: errorCode.toLocaleLowerCase(),
+          lastHealthMessage: result.message,
+          usage: result.usage?.display || target.usage || "",
+          updatedAt
+        };
+        await persistSourceConnection(latest, next);
+      } else {
+        await store.persist();
+      }
+      res.json({
+        ok: result.ok,
+        message: saved ? `${result.message}，已保存并启用` : result.message,
+        usage: result.usage?.display || "",
+        errorCode,
+        retryable,
+        retryAfterAt,
+        providers: allProviderStatuses(user)
+      });
     });
   }));
 
   app.delete("/api/lead-finder/source-config/:provider", requireAuth, asyncRoute(async (req, res) => {
-    const store = getStore();
-    const index = store.providerConnections.findIndex((item) =>
-      item.providerId === req.params.provider
-      && item.ownerId === req.user!.id
-      && item.teamId === req.user!.teamId
-    );
-    if (index < 0) {
-      res.status(404).json({ message: "配置不存在或无权删除" });
-      return;
-    }
-    store.providerConnections.splice(index, 1);
-    await store.persist();
-    res.json({ providers: allProviderStatuses(req.user!) });
+    const keyId = z.string().regex(/^[a-f0-9]{64}$/).optional().parse(req.query.keyId);
+    await writeSourceConfig(async () => {
+      const connection = getProviderConnection(req.user!, String(req.params.provider));
+      if (!connection) {
+        res.status(404).json({ message: "配置不存在或无权删除" });
+        return;
+      }
+      const configuration = providerConnectionConfiguration(connection);
+      const keys = providerApiKeys(configuration);
+      const remaining = keyId ? keys.filter((key) => providerKeyId(connection, key) !== keyId) : [];
+      if (keyId && remaining.length === keys.length) {
+        res.status(404).json({ message: "该 Key 已移除，请刷新后重试" });
+        return;
+      }
+      const next = remaining.length ? {
+        ...connection,
+        configurationEncrypted: encryptProviderConfiguration(connection, {
+          apiKey: remaining[0]!, baseUrl: configuration.baseUrl, backupApiKeys: remaining.slice(1)
+        }),
+        updatedAt: new Date().toISOString()
+      } : undefined;
+      await persistSourceConnection(connection, next);
+      res.json({ providers: allProviderStatuses(req.user!) });
+    });
   }));
 
   app.post("/api/lead-finder/lfind-tasks", requireAuth, asyncRoute(async (req, res) => {

@@ -7,18 +7,18 @@
 import * as XLSX from "xlsx";
 import { type BlockedLeadSource, isLeadSourceAutoSelected, isLeadSourceExecutable } from "../lead-source-selection";
 import {
-  activateNavView, closeModal, confirmAction, createCliAcquireJob, leadFinderJobs, openModal, renderProspectList,
+  activateNavView, closeModal, confirmAction, createCliAcquireJob, leadFinderJobs, openAiSettings, openModal, renderProspectList,
   state
 } from "../prototype-api";
 import { type LeadFinderJob, type LeadProviderStatus, type ProspectRunProcessPhase, type Todo, type WebsiteOpportunity } from "./models";
-import { renderTodos, updateTodoChips } from "./dashboard";
+import { loadLeadProviders, renderTodos, updateTodoChips } from "./dashboard";
 import {
   currentLeadFinderResultJob, currentLeadFinderResults, formatProspectJoinedAt, leadFinderDuplicateState,
   leadFinderFilteredRows, leadFinderLiveElapsed, leadFinderLookupValue, leadFinderMode, leadFinderScore,
   normalizeWebsiteLink, prospectResearchRunning, prospectStatusMeta, renderSuperAiDiscoveryOption,
   renderSuperMapSearchOption, renderSuperSearchPreview, renderSuperWebSearchOption, renderWebsiteOpportunities,
   researchRunningBadgeHtml, selectedSuperAiDiscoveryProviderIds, selectedSuperMapProviderIds,
-  selectedSuperWebProviderIds, websiteContactDisplay, websiteContactPersonDisplay, websiteDomain
+  selectedSuperWebProviderIds, superWebProviders, websiteContactDisplay, websiteContactPersonDisplay, websiteDomain
 } from "./prospecting";
 import { currentDateTimeText, escapeHtml, qs, qsa } from "./shared";
 import {
@@ -126,10 +126,8 @@ export function renderLeadSourceChips() {
           return;
         }
         if (id === "ai_search") {
-          activateNavView("ai-config", () => {
-            qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
-            toast("在此启用模型并勾选“自动获客”，即可把 AI 搜索作为获客来源");
-          });
+          openAiSettings("model");
+          toast("在此设为当前模型并开启「自动获客」，即可使用 AI 搜索");
         } else {
           openLeadSourceCenter(id);
         }
@@ -178,7 +176,16 @@ function leadSourceCredentialLabel(provider: LeadProviderStatus) {
   return provider.id === "sec_edgar" ? "Fair Access User-Agent" : "API Key";
 }
 
-function leadSourceCardsHtml(focusId?: string) {
+export type AiLeadSourceScope = { kind: "web" } | { kind: "provider"; id: string };
+
+let aiLeadSourceScope: AiLeadSourceScope | undefined;
+
+function leadSourceCardsHtml(scope?: AiLeadSourceScope) {
+  const visibleProviders = scope?.kind === "web"
+    ? superWebProviders()
+    : scope?.kind === "provider"
+      ? state.leadProviders.filter((provider) => provider.id === scope.id)
+      : state.leadProviders;
   const cardHtml = (provider: LeadProviderStatus) => {
     const executable = isLeadSourceExecutable(provider);
     const assisted = provider.accessMode !== "api";
@@ -206,6 +213,13 @@ function leadSourceCardsHtml(focusId?: string) {
           ? (provider.lastTestStatus === "passed" ? "已连接并通过测试" : provider.lastTestStatus === "failed" ? `测试失败：${provider.lastTestMessage || `请检查 ${credentialLabel}`}` : `${credentialLabel} 已保存`)
           : `未配置 ${credentialLabel}`;
     const caps = provider.capabilities.map((cap) => `<span class="ls-cap">${escapeHtml(cap)}</span>`).join("");
+    const keys = provider.apiKeys || [];
+    const keyLabel = provider.supportsMultipleKeys && keys.length ? "新增 API Key" : `填写 ${credentialLabel}`;
+    const savedKeys = keys.map((key, index) => `
+      <div class="ls-form-actions">
+        <span class="ls-usage">${credentialLabel}${provider.supportsMultipleKeys ? ` ${index + 1}` : ""}${key.suffix ? ` · ••••${escapeHtml(key.suffix)}` : ""}</span>
+        <button class="btn tiny" type="button" data-ls-delete="${escapeHtml(provider.id)}" data-ls-key-id="${escapeHtml(key.id)}" aria-label="移除 ${credentialLabel} ${index + 1}">移除</button>
+      </div>`).join("");
     const form = assisted ? `
       <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
       <div class="ls-form-actions">
@@ -215,17 +229,17 @@ function leadSourceCardsHtml(focusId?: string) {
       <div class="ls-usage">${escapeHtml(provider.costNote)}</div>
       <div class="ls-form-actions"><button class="btn" type="button" data-ls-ai-config>去 AI 模型配置</button></div>` : configurableApiKey ? `
       <div class="ls-form">
-        <input type="${provider.id === "sec_edgar" ? "text" : "password"}" data-ls-key="${escapeHtml(provider.id)}" placeholder="${provider.hasApiKey ? `${credentialLabel} 已保存（留空不修改）` : provider.optionalKey ? `可选填写 ${credentialLabel}` : `填写 ${credentialLabel}`}" autocomplete="off">
+        ${savedKeys}
+        <input type="${provider.id === "sec_edgar" ? "text" : "password"}" data-ls-key="${escapeHtml(provider.id)}" placeholder="${escapeHtml(keyLabel)}" aria-label="${escapeHtml(keyLabel)}" autocomplete="new-password">
         <div class="ls-form-actions">
-          <button class="btn primary" type="button" data-ls-save="${escapeHtml(provider.id)}">保存并启用</button>
-          <button class="btn" type="button" data-ls-test="${escapeHtml(provider.id)}">测试连接</button>
-          ${provider.hasApiKey ? `<button class="btn" type="button" data-ls-delete="${escapeHtml(provider.id)}">清除</button>` : ""}
+          <button class="btn primary" type="button" data-ls-test="${escapeHtml(provider.id)}">${provider.hasApiKey || provider.optionalKey ? "测试连接" : "测试并启用"}</button>
         </div>
+        ${provider.supportsMultipleKeys ? '<div class="ls-usage">可添加多个 Key，按添加顺序使用。达到配额或频率限制时自动切换。</div>' : ""}
         ${provider.usage ? `<div class="ls-usage">${escapeHtml(provider.usage)}</div>` : ""}
         <div class="ls-usage">${escapeHtml(provider.keyHint)}</div>
       </div>` : `<div class="ls-usage">${escapeHtml(provider.costNote)}</div>`;
     return `
-      <div class="ls-card ${assisted ? "is-assisted" : ""} ${executable && provider.requiresKey ? "is-ready" : ""} ${focusId === provider.id ? "is-open" : ""}">
+      <div class="ls-card ${assisted ? "is-assisted" : ""} ${executable && provider.requiresKey ? "is-ready" : ""}">
         <div class="ls-card-top">
           <div><h4>${escapeHtml(provider.name)}</h4><p>${leadCategoryText(provider)} · ${escapeHtml(provider.costNote)}</p></div>
           <span class="ls-tier ${assisted ? "assisted" : provider.tier}">${assisted ? "导入/人工检索" : leadTierText(provider.tier)}</span>
@@ -244,7 +258,7 @@ function leadSourceCardsHtml(focusId?: string) {
     { id: "assisted", title: "导入/人工情报" }
   ];
   const content = groups.map((group) => {
-    const providers = state.leadProviders.filter((provider) => leadSourceGroup(provider) === group.id);
+    const providers = visibleProviders.filter((provider) => leadSourceGroup(provider) === group.id);
     if (!providers.length) return "";
     return `
       <section class="ls-group">
@@ -253,19 +267,23 @@ function leadSourceCardsHtml(focusId?: string) {
       </section>
     `;
   }).join("");
-  return content;
+  return content || '<div class="empty-cell">暂无可配置的数据源</div>';
 }
 
-function bindLeadSourceCards() {
-  const modal = qs<HTMLElement>("#appModal");
-  if (!modal) return;
-  qsa<HTMLButtonElement>("[data-ls-save]", modal).forEach((button) => button.addEventListener("click", () => void saveLeadSourceConfig(button.dataset.lsSave || "", button)));
-  qsa<HTMLButtonElement>("[data-ls-test]", modal).forEach((button) => button.addEventListener("click", () => void testLeadSourceConfig(button.dataset.lsTest || "", button)));
-  qsa<HTMLButtonElement>("[data-ls-delete]", modal).forEach((button) => button.addEventListener("click", () => void deleteLeadSourceConfig(button.dataset.lsDelete || "")));
-  qsa<HTMLButtonElement>("[data-ls-import]", modal).forEach((button) => {
+function bindLeadSourceCards(container: HTMLElement) {
+  qsa<HTMLInputElement>("[data-ls-key]", container).forEach((input) => {
+    const button = qs<HTMLButtonElement>("[data-ls-test]", input.parentElement!);
+    if (!button) return;
+    const idleLabel = button.textContent;
+    input.addEventListener("input", () => {
+      button.textContent = input.value.trim() ? "测试并启用" : idleLabel;
+    });
+  });
+  qsa<HTMLButtonElement>("[data-ls-test]", container).forEach((button) => button.addEventListener("click", () => void testLeadSourceConfig(button.dataset.lsTest || "", button)));
+  qsa<HTMLButtonElement>("[data-ls-delete]", container).forEach((button) => button.addEventListener("click", () => void deleteLeadSourceConfig(button.dataset.lsDelete || "", button.dataset.lsKeyId || "")));
+  qsa<HTMLButtonElement>("[data-ls-import]", container).forEach((button) => {
     button.addEventListener("click", () => {
       const provider = state.leadProviders.find((item) => item.id === button.dataset.lsImport);
-      closeModal();
       activateNavView("lead-finder", () => {
         qs<HTMLDetailsElement>(".lead-advanced-settings")?.setAttribute("open", "true");
         const input = qs<HTMLTextAreaElement>("#leadFinderUrlInput");
@@ -275,22 +293,45 @@ function bindLeadSourceCards() {
       });
     });
   });
-  qs<HTMLButtonElement>("[data-ls-ai-config]", modal)?.addEventListener("click", () => {
-    closeModal();
-    activateNavView("ai-config", () => {
-      qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
-      toast("启用模型并勾选“自动获客”后，AI 搜索即可用");
-    });
-  });
+  qs<HTMLButtonElement>("[data-ls-ai-config]", container)?.addEventListener("click", () => openAiSettings("model"));
 }
 
-export function openLeadSourceCenter(focusId?: string) {
-  openModal("数据源中心", leadSourceCardsHtml(focusId), `<button class="btn" data-modal-close>关闭</button>`);
-  bindLeadSourceCards();
+function renderAiLeadSourceCards() {
+  const cards = qs<HTMLElement>("#aiLeadSourceCards");
+  if (!cards) return;
+  cards.innerHTML = leadSourceCardsHtml(aiLeadSourceScope);
+  bindLeadSourceCards(cards);
 }
 
-function refreshLeadSourceCenter(providers?: LeadProviderStatus[]) {
-  if (providers) state.leadProviders = providers;
+export function showAiLeadSources(scope?: AiLeadSourceScope) {
+  aiLeadSourceScope = scope;
+  const title = qs<HTMLElement>("#aiLeadSourcesTitle");
+  const all = qs<HTMLButtonElement>("#aiShowAllSources");
+  if (all) all.hidden = !scope;
+  const render = () => {
+    if (aiLeadSourceScope !== scope) return;
+    if (title) title.textContent = scope?.kind === "web"
+      ? "网页搜索来源"
+      : scope?.kind === "provider"
+        ? (state.leadProviders.find((provider) => provider.id === scope.id)?.name || (scope.id === "google_places" ? "Google Places" : "数据源配置"))
+        : "搜客数据源";
+    renderAiLeadSourceCards();
+  };
+  render();
+  if (!state.leadProviders.length) {
+    const cards = qs<HTMLElement>("#aiLeadSourceCards");
+    if (cards) cards.textContent = "正在加载数据源…";
+    void loadLeadProviders().then(render);
+  }
+}
+
+export function openLeadSourceCenter(providerId?: string) {
+  if (providerId === "ai_search") openAiSettings("model");
+  else openAiSettings("sources", providerId ? { kind: "provider", id: providerId } : undefined);
+}
+
+function refreshLeadSourceCenter(providers: LeadProviderStatus[], changedProviderId: string) {
+  state.leadProviders = providers;
   if (!state.leadSourceSelectionTouched) {
     state.selectedLeadSources = state.leadProviders
       .filter((item) => item.id !== "ai_search" && isLeadSourceAutoSelected(item))
@@ -300,87 +341,62 @@ function refreshLeadSourceCenter(providers?: LeadProviderStatus[]) {
   renderSuperWebSearchOption();
   renderSuperMapSearchOption();
   renderSuperAiDiscoveryOption();
-  const modal = qs<HTMLElement>("#appModal");
-  if (modal?.classList.contains("active")) {
-    const body = qs<HTMLElement>("#modalBody");
-    if (body) {
-      body.innerHTML = leadSourceCardsHtml();
-      bindLeadSourceCards();
+  const cards = qs<HTMLElement>("#aiLeadSourceCards");
+  if (cards) {
+    const drafts = qsa<HTMLInputElement>("[data-ls-key]", cards)
+      .filter((input) => input.dataset.lsKey !== changedProviderId && input.value)
+      .map((input) => [input.dataset.lsKey, input.value] as const);
+    renderAiLeadSourceCards();
+    for (const [id, value] of drafts) {
+      const input = qs<HTMLInputElement>(`[data-ls-key="${CSS.escape(id || "")}"]`, cards);
+      if (input) {
+        input.value = value;
+        input.dispatchEvent(new Event("input"));
+      }
     }
   }
 }
 
-async function saveLeadSourceConfig(providerId: string, button?: HTMLButtonElement) {
-  if (!providerId) return;
-  const input = qs<HTMLInputElement>(`[data-ls-key="${providerId}"]`);
+async function testLeadSourceConfig(providerId: string, button: HTMLButtonElement) {
+  const input = qs<HTMLInputElement>(`#aiLeadSourceCards [data-ls-key="${CSS.escape(providerId)}"]`);
   const key = input?.value.trim() || "";
   const provider = state.leadProviders.find((item) => item.id === providerId);
-  if (provider?.requiresKey && !key && !provider.hasApiKey) {
-    toast(`请先填写${leadSourceCredentialLabel(provider)}`, "error");
+  if (!provider) return;
+  if (provider.requiresKey && !provider.hasApiKey && !key) {
+    toast(`请先填写 ${leadSourceCredentialLabel(provider)}`, "error");
     return;
   }
-  const original = button?.textContent || "";
-  if (button) { button.disabled = true; button.textContent = "保存中"; }
-  try {
-    const result = await api<{ providers: LeadProviderStatus[] }>("/api/lead-finder/source-config", {
-      method: "POST",
-      body: JSON.stringify({ provider: providerId, apiKey: key, enabled: true })
-    });
-    state.leadSourceSelectionTouched = true;
-    refreshLeadSourceCenter(result.providers);
-    const nextProvider = state.leadProviders.find((item) => item.id === providerId);
-    if (isLeadSourceExecutable(nextProvider)) {
-      if (!state.selectedLeadSources.includes(providerId)) state.selectedLeadSources = [...state.selectedLeadSources, providerId];
-      if (leadFinderMode === "super" && nextProvider?.category === "web") {
-        const checkbox = qs<HTMLInputElement>("#leadSuperWebSearch");
-        if (checkbox) checkbox.checked = true;
-      }
-      if (leadFinderMode === "super" && nextProvider?.capabilities.includes("maps")) {
-        const checkbox = qs<HTMLInputElement>("#leadSuperMapSearch");
-        if (checkbox) checkbox.checked = true;
-      }
-      renderLeadSourceChips();
-      renderSuperWebSearchOption();
-      renderSuperMapSearchOption();
-      renderSuperSearchPreview();
-      toast(`已保存并启用：${provider?.name || providerId}`);
-    } else {
-      state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== providerId);
-      renderLeadSourceChips();
-      toast(`${provider?.name || providerId} 已保存，但来源目录当前停用`, "error");
-    }
-  } catch (error) {
-    toast(error instanceof Error ? error.message : "保存失败", "error");
-  } finally {
-    if (button) { button.disabled = false; button.textContent = original || "保存并启用"; }
-  }
-}
 
-async function testLeadSourceConfig(providerId: string, button?: HTMLButtonElement) {
-  if (!providerId) return;
-  const input = qs<HTMLInputElement>(`[data-ls-key="${providerId}"]`);
-  const key = input?.value.trim() || "";
-  const provider = state.leadProviders.find((item) => item.id === providerId);
-  const original = button?.textContent || "";
-  if (button) { button.disabled = true; button.textContent = "测试中"; }
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "测试中";
+  if (input) input.disabled = true;
   try {
-    // 若填了新 key，先静默保存再测试，保证“填上 key 就能测通”
-    if ((provider?.requiresKey || provider?.optionalKey) && key) {
-      await api("/api/lead-finder/source-config", { method: "POST", body: JSON.stringify({ provider: providerId, apiKey: key, enabled: true }) });
-    }
     const result = await api<{
       ok: boolean;
       message: string;
       usage: string;
-      errorCode: string;
       retryable: boolean;
       retryAfterAt: string | null;
       providers: LeadProviderStatus[];
     }>("/api/lead-finder/source-config/test", {
       method: "POST",
-      body: JSON.stringify({ provider: providerId })
+      body: JSON.stringify({ provider: providerId, apiKey: key })
     });
-    refreshLeadSourceCenter(result.providers);
+    if (result.ok && isLeadSourceExecutable(result.providers.find((item) => item.id === providerId))) {
+      state.leadSourceSelectionTouched = true;
+      if (!state.selectedLeadSources.includes(providerId)) state.selectedLeadSources = [...state.selectedLeadSources, providerId];
+      if (leadFinderMode === "super") {
+        const checkbox = provider.capabilities.includes("maps") ? "#leadSuperMapSearch"
+          : provider.category === "web" ? "#leadSuperWebSearch" : "";
+        if (checkbox) {
+          const control = qs<HTMLInputElement>(checkbox);
+          if (control) control.checked = true;
+        }
+      }
+    }
+    refreshLeadSourceCenter(result.providers, result.ok ? providerId : "");
+    renderSuperSearchPreview();
     const retryAt = result.retryAfterAt ? new Date(result.retryAfterAt) : null;
     const retryHint = retryAt && !Number.isNaN(retryAt.getTime())
       ? ` · ${retryAt.toLocaleString("zh-CN", { hour12: false })} 后可重试`
@@ -389,35 +405,34 @@ async function testLeadSourceConfig(providerId: string, button?: HTMLButtonEleme
   } catch (error) {
     toast(error instanceof Error ? error.message : "测试失败", "error");
   } finally {
-    if (button) { button.disabled = false; button.textContent = original || "测试连接"; }
+    button.disabled = false;
+    button.textContent = original;
+    if (input) input.disabled = false;
   }
 }
 
-async function deleteLeadSourceConfig(providerId: string) {
-  if (!providerId) return;
+async function deleteLeadSourceConfig(providerId: string, keyId: string) {
   const provider = state.leadProviders.find((item) => item.id === providerId);
+  if (!provider || !keyId) return;
   const confirmed = await confirmAction({
-    title: "清除数据源密钥",
-    message: "清除后，该数据源将停止执行需要认证的搜索任务。",
-    detail: provider?.name || providerId,
+    title: "移除凭据",
+    message: "移除后，搜客会继续使用该来源其余的可用凭据。",
+    detail: provider.name,
     detailLabel: "数据源",
-    consequences: ["已保存的 API Key 会被移除", "历史搜索结果与运行记录会保留", "重新配置密钥后可以恢复使用"],
-    confirmLabel: "清除密钥",
+    confirmLabel: "移除",
     tone: "warning"
   });
-  if (!confirmed) {
-    openLeadSourceCenter(providerId);
-    return;
-  }
+  if (!confirmed) return;
   try {
-    const result = await api<{ providers: LeadProviderStatus[] }>(`/api/lead-finder/source-config/${encodeURIComponent(providerId)}`, { method: "DELETE" });
-    state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== providerId);
-    refreshLeadSourceCenter(result.providers);
-    openLeadSourceCenter(providerId);
-    toast("已清除该数据源的 API Key");
+    const result = await api<{ providers: LeadProviderStatus[] }>(`/api/lead-finder/source-config/${encodeURIComponent(providerId)}?keyId=${encodeURIComponent(keyId)}`, { method: "DELETE" });
+    if (!isLeadSourceExecutable(result.providers.find((item) => item.id === providerId))) {
+      state.selectedLeadSources = state.selectedLeadSources.filter((item) => item !== providerId);
+    }
+    refreshLeadSourceCenter(result.providers, "");
+    renderSuperSearchPreview();
+    toast("凭据已移除");
   } catch (error) {
-    openLeadSourceCenter(providerId);
-    toast(error instanceof Error ? error.message : "清除失败", "error");
+    toast(error instanceof Error ? error.message : "移除失败", "error");
   }
 }
 

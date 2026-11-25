@@ -1,8 +1,8 @@
 /**
- * 发信前邮箱验证：状态徽标、单个/批量验证、邮箱设置页的验证策略配置。
+ * 发信前邮箱验证：状态徽标、单个/批量验证、AI 配置页的验证策略配置。
  * 后端见 backend/src/email-verifier.ts；结果按「团队 + 邮箱」缓存。
  */
-import { badge, escapeHtml, qs, setFieldValue } from "./shared";
+import { badge, escapeHtml, qs, qsa, setFieldValue } from "./shared";
 import { api, setButtonPending, toast } from "./ui";
 
 export type EmailVerificationStatus =
@@ -122,7 +122,7 @@ function renderVerificationConfig(config: VerificationConfigView) {
   if (enabled) enabled.checked = config.enabled;
   const require = qs<HTMLInputElement>("#emailVerifyRequire");
   if (require) require.checked = config.requireVerified;
-  setFieldValue("#emailVerifyProvider", config.provider);
+  setFieldValue("#emailVerifyProvider", config.provider === "none" ? "" : config.provider);
   setFieldValue("#emailVerifyStaleDays", String(config.staleDays));
   setFieldValue("#emailVerifyApiKey", "");
   const key = qs<HTMLInputElement>("#emailVerifyApiKey");
@@ -141,13 +141,17 @@ function renderVerificationConfig(config: VerificationConfigView) {
   }
 }
 
-export async function loadEmailVerificationConfig() {
-  if (!qs<HTMLElement>("#emailVerifyStatus")) return;
+export async function loadEmailVerificationConfig(canManage: boolean) {
+  const panel = qs<HTMLElement>('[data-ai-settings-panel="verification"]');
+  const status = qs<HTMLElement>("#emailVerifyStatus");
+  if (!panel || !status) return;
+  const controls = qsa<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input, select, button", panel);
+  controls.forEach((control) => { control.disabled = true; });
   try {
     renderVerificationConfig((await api<{ config: VerificationConfigView }>("/api/email-delivery/verification")).config);
+    if (canManage) controls.forEach((control) => { control.disabled = false; });
   } catch (error) {
-    const status = qs<HTMLElement>("#emailVerifyStatus");
-    if (status) status.innerHTML = `${badge("读取失败", "amber")} <small>${escapeHtml(error instanceof Error ? error.message : "未知错误")}</small>`;
+    status.innerHTML = `${badge("读取失败", "amber")} <small>${escapeHtml(error instanceof Error ? error.message : "未知错误")}</small>`;
   }
 }
 
@@ -156,6 +160,10 @@ export async function saveEmailVerificationConfig(button?: HTMLButtonElement | n
   if (!(staleDays >= 1 && staleDays <= 365)) { toast("验证有效期需在 1–365 天之间", "error"); return; }
   const provider = (qs<HTMLSelectElement>("#emailVerifyProvider")?.value || "none") as VerificationConfigView["provider"];
   const apiKey = qs<HTMLInputElement>("#emailVerifyApiKey")?.value.trim() || "";
+  if (apiKey && provider === "none") {
+    toast("请先选择第三方验证服务", "error");
+    return;
+  }
   const blockStatuses = BLOCKABLE.filter((status) => qs<HTMLInputElement>(`[data-email-verify-block="${status}"]`)?.checked);
   setButtonPending(button ?? null, true, "保存", "保存中");
   try {

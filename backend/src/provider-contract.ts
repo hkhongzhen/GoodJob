@@ -943,6 +943,20 @@ export function providerErrorFromUnknown(
     .join("：")
     .slice(0, 500);
   const lower = message.toLocaleLowerCase();
+  const explicitQuotaError = !isAiModelRequest && (httpStatus === 400 || httpStatus === 403 || httpStatus === 429)
+    && /(?:insufficient[_ ](?:credits?|quota)|not enough credits?|out of credits?|ran out of credits?|quota[_ ]exceeded|quota[_ ]exhausted|daily limit exceeded|monthly limit exceeded)/i.test(`${upstreamCode} ${upstreamMessage}`);
+  if (httpStatus === 402 || explicitQuotaError) {
+    return new ProviderContractError({
+      code: "PROVIDER_QUOTA_EXHAUSTED",
+      retryable: false,
+      retryAfterAt: retryAt,
+      publicMessage: isAiModelRequest
+        ? `AI 模型额度已用尽（HTTP 402）${aiDetail ? `：${aiDetail}` : ""}`
+        : "数据源额度已用尽，请检查套餐或预算",
+      httpStatus,
+      phase
+    }, { cause: error });
+  }
   if (httpStatus === 401 || httpStatus === 403) {
     return new ProviderContractError({
       code: "PROVIDER_AUTH_FAILED",
@@ -963,18 +977,6 @@ export function providerErrorFromUnknown(
       publicMessage: isAiModelRequest
         ? `AI 模型限流或额度不足（HTTP 429）${aiDetail ? `：${aiDetail}` : ""}`
         : "数据源当前限流，可稍后重试",
-      httpStatus,
-      phase
-    }, { cause: error });
-  }
-  if (httpStatus === 402) {
-    return new ProviderContractError({
-      code: "PROVIDER_QUOTA_EXHAUSTED",
-      retryable: false,
-      retryAfterAt: null,
-      publicMessage: isAiModelRequest
-        ? `AI 模型额度已用尽（HTTP 402）${aiDetail ? `：${aiDetail}` : ""}`
-        : "数据源额度已用尽，请检查套餐或预算",
       httpStatus,
       phase
     }, { cause: error });

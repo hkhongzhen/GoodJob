@@ -8,7 +8,7 @@ import { state } from "../prototype-api";
 import { type AiModelConfig, type OcrJob } from "./models";
 import { loadLeadProviders } from "./dashboard";
 import { syncLeadFinderStartState } from "./prospecting";
-import { aiProviderPresets, badge, escapeHtml, ocrBatchJobs, qs, qsa } from "./shared";
+import { aiProviderPresets, badge, escapeHtml, ocrBatchJobs, qs, qsa, setFieldValue } from "./shared";
 import { api, toast } from "./ui";
 import { reloadLeads } from "./leads";
 import { renderLeadFinder } from "./lead-sources";
@@ -339,461 +339,259 @@ export function collectOcrFields() {
   return fields;
 }
 
-let aiTestingActive = false;
-export function renderAiConfig(config: AiModelConfig | null) {
-  const selected = state.aiDraftMode ? null : (state.aiConfigs.find((item) => item.id === state.selectedAiConfigId) || config || state.aiConfigs[0] || null);
-  config = selected;
-  if (!state.aiDraftMode) {
-    state.selectedAiConfigId = selected?.id || null;
-    if (selected) state.aiConfig = selected;
-  }
-  const name = qs<HTMLInputElement>("#aiConfigName");
-  const baseUrl = qs<HTMLInputElement>("#aiBaseUrlInput");
-  const model = qs<HTMLInputElement>("#aiModelInput");
-  const apiKey = qs<HTMLInputElement>("#aiApiKeyInput");
-  const enabled = qs<HTMLInputElement>("#aiEnabledInput");
-  const badgeNode = qs<HTMLElement>("#aiConfigBadge");
-  const gptName = qs<HTMLInputElement>("#gptConfigName");
-  const gptBaseUrl = qs<HTMLInputElement>("#gptBaseUrlInput");
-  const gptModel = qs<HTMLInputElement>("#gptModelInput");
-  const gptApiKey = qs<HTMLInputElement>("#gptApiKeyInput");
-  const gptEnabled = qs<HTMLSelectElement>("#gptEnabledSelect");
-  const providerSelect = qs<HTMLSelectElement>("#gptProviderSelect");
-  const protocolSelect = qs<HTMLSelectElement>("#gptProtocolSelect");
-  const temperatureInput = qs<HTMLInputElement>("#gptTemperatureInput");
-  const gptBadge = qs<HTMLElement>("#gptConfigBadge");
-  const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
-  const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
-  const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
-  const gptWebSearchStatus = qs<HTMLElement>("#gptWebSearchStatus");
-  const gptState = qs<HTMLElement>("#gptConfigState");
-  const gptSub = qs<HTMLElement>("#gptConfigSub");
-  const gptModelState = qs<HTMLElement>("#gptModelState");
-  const providerState = qs<HTMLElement>("#gptProviderState");
-  const protocolState = qs<HTMLElement>("#gptProtocolState");
-  const useState = qs<HTMLElement>("#gptUseState");
-  const countText = qs<HTMLElement>("#aiConfigCountText");
+type AiConfigResponse = {
+  config: AiModelConfig;
+  currentConfig: AiModelConfig | null;
+  configs: AiModelConfig[];
+};
+
+let aiConfigBusy = false;
+
+export function renderAiConfig(current: AiModelConfig | null) {
+  const saved = state.aiConfigs.find((item) => item.id === state.selectedAiConfigId);
+  const config = state.aiDraftMode ? null : saved || current || state.aiConfigs[0] || null;
+  state.selectedAiConfigId = config?.id || null;
   const list = qs<HTMLElement>("#aiConfigList");
-  const modeAlert = qs<HTMLElement>("#aiConfigModeAlert");
-  const deleteButton = qs<HTMLButtonElement>("#aiDeleteConfigButton");
-  const toggleButton = qs<HTMLButtonElement>("#aiToggleEnabledButton");
-  const draftMode = state.aiDraftMode;
-  const defaultName = "";
-  const defaultBaseUrl = "";
-  const defaultModel = "";
-  const provider = draftMode ? (providerSelect?.value || "openai") : (config?.provider || "openai");
-  const preset = aiProviderPresets[provider] || aiProviderPresets.openai;
-  const protocol = draftMode ? ((protocolSelect?.value as AiModelConfig["protocol"]) || preset.protocol) : (config?.protocol || preset.protocol);
-  const ready = Boolean(config?.enabled && config?.hasApiKey);
-  const tested = config?.lastTestStatus === "passed";
-  const failed = config?.lastTestStatus === "failed";
-  const webSearchStatus = config?.webSearchStatus || "untested";
-  const webSearchReady = webSearchStatus === "passed";
-  const webSearchUnsupported = webSearchStatus === "unsupported";
-  const webSearchFailed = webSearchStatus === "failed";
-  const useFlags = {
-    leadFinder: config?.useLeadFinder ?? true,
-    websiteParse: false,
-    scoring: config?.useScoring ?? true,
-    emailDraft: config?.useEmailDraft ?? true,
-    exam: config?.useExam ?? false
-  };
-  const useCount = Object.values(useFlags).filter(Boolean).length;
-  if (countText) countText.textContent = `${state.aiConfigs.length} 个配置实例`;
   if (list) {
-    const draftRow = state.aiDraftMode ? `
-      <button class="ai-instance-row active is-draft" type="button" data-ai-draft-row>
-        <span><b>未保存的新配置</b></span>
-        <em>${badge("新增", "amber")}</em>
-      </button>
-    ` : "";
-    const savedRows = state.aiConfigs.map((item) => {
-      const itemPreset = aiProviderPresets[item.provider] || aiProviderPresets.custom;
-      const itemUseCount = [item.useLeadFinder, item.useWebsiteParse, item.useScoring, item.useEmailDraft, item.useExam].filter(Boolean).length;
-      const active = !state.aiDraftMode && item.id === state.selectedAiConfigId;
-      return `
-        <button class="ai-instance-row ${active ? "active" : ""}" type="button" data-ai-config-id="${escapeHtml(item.id)}">
-          <span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(itemPreset.label)} · ${escapeHtml(item.model)} · ${itemUseCount} 个用途</small></span>
-          <em>${badge(item.enabled ? "启用" : "停用", item.enabled ? "green" : "gray")}${badge(item.hasApiKey ? "有Key" : "缺Key", item.hasApiKey ? "green" : "amber")}${item.useLeadFinder ? badge(item.webSearchStatus === "passed" ? "官网联网已验证" : item.webSearchStatus === "unsupported" ? "需官网搜索 API" : "官网联网待测", item.webSearchStatus === "passed" ? "green" : item.webSearchStatus === "failed" ? "red" : "amber") : ""}</em>
-        </button>
-      `;
-    }).join("");
-    list.innerHTML = draftRow || savedRows ? `${draftRow}${savedRows}` : `<div class="empty-cell">暂无配置</div>`;
-    qsa<HTMLButtonElement>("#aiConfigList [data-ai-config-id]").forEach((button) => {
+    list.innerHTML = state.aiConfigs.map((item) => {
+      const active = item.id === current?.id;
+      const selected = item.id === config?.id;
+      return `<button class="ai-instance-row ${selected ? "active" : ""}" type="button" aria-pressed="${selected}" data-ai-config-id="${escapeHtml(item.id)}" ${aiConfigBusy ? "disabled" : ""}>
+        <span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.model)}</small></span>
+        <em>${active ? badge("当前模型", "green") : ""}${item.hasApiKey ? "" : badge("缺少 Key", "amber")}</em>
+      </button>`;
+    }).join("") || '<div class="empty-cell">暂无配置</div>';
+    qsa<HTMLButtonElement>("[data-ai-config-id]", list).forEach((button) => {
       button.addEventListener("click", () => {
         state.aiDraftMode = false;
         state.pendingAiDeleteId = null;
         state.selectedAiConfigId = button.dataset.aiConfigId || null;
-        renderAiConfig(state.aiConfigs.find((item) => item.id === state.selectedAiConfigId) || null);
+        renderAiConfig(state.aiConfig);
       });
     });
   }
-  if (modeAlert) {
-    modeAlert.innerHTML = state.pendingAiDeleteId && state.pendingAiDeleteId === config?.id
-      ? `<b>确认删除</b><span>将删除“${escapeHtml(config.name)}”，再次点击“确认删除”才会执行。</span>`
-      : state.aiDraftMode
-      ? `<b>新增配置</b>`
-      : config
-        ? `<b>编辑配置</b><span>${escapeHtml(config.name)}</span>`
-        : `<b>暂无配置</b>`;
-  }
-  if (deleteButton) {
-    deleteButton.disabled = state.aiDraftMode || !config;
-    deleteButton.textContent = state.pendingAiDeleteId && state.pendingAiDeleteId === config?.id ? "确认删除" : "删除当前";
-  }
-  if (toggleButton) {
-    toggleButton.disabled = state.aiDraftMode || !config;
-    toggleButton.textContent = config?.enabled ? "停用当前" : "启用当前";
-  }
-  if (name && !draftMode) name.value = config?.name || defaultName;
-  if (baseUrl && !draftMode) baseUrl.value = config?.baseUrl || defaultBaseUrl;
-  if (model && !draftMode) model.value = config?.model || defaultModel;
-  if (apiKey && !draftMode) {
-    apiKey.value = config?.apiKey || "";
-    apiKey.placeholder = config?.hasApiKey ? "已保存，重新填写可覆盖" : "保存后仅后端持久化";
-  }
-  if (enabled && !draftMode) enabled.checked = Boolean(config?.enabled);
-  if (badgeNode) {
-    badgeNode.className = `badge ${ready ? "green" : config?.enabled ? "amber" : ""}`;
-    badgeNode.textContent = ready ? `AI已启用 · ${config?.model}` : config?.enabled ? "来源归纳 · 缺少API Key" : "来源归纳";
-  }
-  if (gptName && !draftMode) gptName.value = config?.name || defaultName;
-  if (gptBaseUrl && !draftMode) gptBaseUrl.value = config?.baseUrl || defaultBaseUrl;
-  if (gptModel && !draftMode) gptModel.value = config?.model || defaultModel;
-  if (providerSelect && !draftMode) providerSelect.value = provider;
-  if (protocolSelect && !draftMode) protocolSelect.value = protocol;
-  if (temperatureInput && !draftMode) temperatureInput.value = String(config?.temperature ?? 0.1);
-  if (gptApiKey && !draftMode) {
-    gptApiKey.value = config?.apiKey || "";
-    gptApiKey.placeholder = config?.hasApiKey ? "已保存，重新填写可覆盖" : "保存后仅显示末四位";
-  }
-  if (gptEnabled && !draftMode) gptEnabled.value = config?.enabled === false ? "false" : "true";
-  if (gptBadge) {
-    gptBadge.className = `badge ${ready ? "green" : config?.enabled ? "amber" : ""}`;
-    gptBadge.textContent = ready ? "当前" : config?.enabled ? "缺Key" : "当前";
-  }
-  qsa<HTMLElement>("[data-ai-provider]").forEach((card) => {
-    const active = card.dataset.aiProvider === provider;
-    card.classList.toggle("active", active);
-    const badgeNodeInCard = card.querySelector<HTMLElement>(".badge");
-    if (badgeNodeInCard) {
-      badgeNodeInCard.className = `badge ${active ? "green" : "gray"}`;
-      badgeNodeInCard.textContent = active ? "当前" : (card.dataset.aiProvider === "anthropic" || card.dataset.aiProvider === "gemini" ? "原生" : "兼容");
+
+  const deleting = Boolean(config && state.pendingAiDeleteId === config.id);
+  const title = qs<HTMLElement>("#aiConfigModeAlert");
+  if (title) title.textContent = deleting ? `确认删除「${config?.name}」` : config ? "编辑模型" : "新增模型";
+  const toggle = qs<HTMLButtonElement>("#aiToggleEnabledButton");
+  if (toggle) toggle.textContent = config && config.id === current?.id ? "停用当前模型" : "设为当前";
+  const remove = qs<HTMLButtonElement>("#aiDeleteConfigButton");
+  if (remove) remove.textContent = deleting ? "确认删除" : "删除配置";
+  setAiConfigButtons();
+
+  if (!state.aiDraftMode) {
+    setFieldValue("#gptConfigName", config?.name || "");
+    setFieldValue("#gptBaseUrlInput", config?.baseUrl || "");
+    setFieldValue("#gptModelInput", config?.model || "");
+    setFieldValue("#gptProtocolSelect", config?.protocol || "openai-compatible");
+    setFieldValue("#gptTemperatureInput", String(config?.temperature ?? 0.1));
+    setFieldValue("#gptBaseUrlSuggestions", "");
+    const key = qs<HTMLInputElement>("#gptApiKeyInput");
+    if (key) {
+      key.value = "";
+      key.type = "password";
+      key.placeholder = config?.hasApiKey ? "已保存，可留空" : "输入 API Key";
     }
-  });
-  if (gptConnectionBadge && !aiTestingActive) {
-    gptConnectionBadge.className = `badge ${tested && (!config?.useLeadFinder || webSearchReady) ? "green" : failed || webSearchFailed ? "red" : ready ? "amber" : ""}`;
-    gptConnectionBadge.textContent = tested && (!config?.useLeadFinder || webSearchReady)
-      ? "连接与联网通过"
-      : webSearchUnsupported
-        ? tested ? "普通 AI 通过" : "模型不支持联网"
-        : webSearchFailed
-          ? "联网测试失败"
-          : failed
-            ? "连接失败"
-            : ready
-              ? "待测试联网能力"
-              : "未启用";
-  }
-  if (gptConnectionTitle && !aiTestingActive) gptConnectionTitle.textContent = tested && (!config?.useLeadFinder || webSearchReady)
-    ? "AI 与官网联网测试通过"
-    : webSearchUnsupported
-      ? tested ? "普通 AI 通过，官网需搜索 API" : "当前模型不能确认官网"
-      : webSearchFailed
-        ? "普通 AI 可用，但官网联网未通过"
-        : failed
-          ? "AI 连接测试失败"
-          : ready
-            ? "等待官网联网测试"
-            : config?.enabled
-              ? "缺少 API Key"
-              : "AI 未启用";
-  if (gptConnectionText && !aiTestingActive) gptConnectionText.textContent = config?.lastTestMessage || (ready ? `当前模型：${config?.model} · ${useCount} 个业务模块` : "");
-  if (gptWebSearchStatus) {
-    const citationCount = Number(config?.webSearchCitationCount || 0);
-    gptWebSearchStatus.className = `ai-web-search-status ${webSearchReady ? "is-ready" : webSearchFailed ? "is-blocked" : "is-pending"}`;
-    gptWebSearchStatus.textContent = webSearchReady
-      ? `官网发现：Web Search 已验证${citationCount ? ` · 最近 ${citationCount} 条引用` : ""}`
-      : webSearchUnsupported
-        ? "官网发现：当前模型不支持原生 Web Search；配置 Brave、Serper、SerpApi 或 Google Places 后可继续自动搜客"
-        : webSearchFailed
-          ? "官网发现：Web Search 失败，不会采信模型猜测的网址"
-          : config?.useLeadFinder
-            ? "官网发现：请先测试 Web Search，自动搜客才会启动"
-            : "官网发现：未启用自动获客，暂不要求 Web Search";
-  }
-  if (gptState) gptState.textContent = ready ? "已启用" : config?.enabled ? "待补Key" : "未启用";
-  if (gptSub) gptSub.textContent = tested ? "最近测试通过" : ready ? "可测试连接和调用" : "等待 API Key";
-  if (gptModelState) gptModelState.textContent = config?.model || defaultModel;
-  if (providerState) providerState.textContent = preset.label;
-  if (protocolState) protocolState.textContent = protocol === "anthropic" ? "Anthropic Messages" : protocol === "gemini" ? "Gemini generateContent" : "OpenAI兼容协议";
-  if (useState) useState.textContent = `${useCount} 个模块`;
-  [
-    ["#aiUseLeadFinder", useFlags.leadFinder],
-    ["#aiUseWebsiteParse", useFlags.websiteParse],
-    ["#aiUseScoring", useFlags.scoring],
-    ["#aiUseEmailDraft", useFlags.emailDraft],
-    ["#aiUseExam", useFlags.exam]
-  ].forEach(([selector, checked]) => {
-    const input = qs<HTMLInputElement>(String(selector));
-    if (input && !draftMode) input.checked = Boolean(checked);
-  });
-  Object.entries(useFlags).forEach(([key, on]) => {
-    const row = qs<HTMLElement>(`[data-ai-use-row="${key}"]`);
-    const stateBadge = row?.querySelector<HTMLElement>(".badge");
-    if (stateBadge) {
-      stateBadge.className = `badge ${ready && on ? "green" : on ? "amber" : "gray"}`;
-      stateBadge.textContent = ready && on ? "已启用" : on ? "待Key" : "关闭";
+    const reveal = qs<HTMLButtonElement>("#gptRevealKeyButton");
+    if (reveal) reveal.textContent = "显示";
+    const useFlags = [
+      ["#aiUseLeadFinder", config?.useLeadFinder ?? true],
+      ["#aiUseScoring", config?.useScoring ?? true],
+      ["#aiUseEmailDraft", config?.useEmailDraft ?? true],
+      ["#aiUseExam", config?.useExam ?? false]
+    ] as const;
+    for (const [selector, checked] of useFlags) {
+      const input = qs<HTMLInputElement>(selector);
+      if (input) input.checked = checked;
     }
+  }
+
+  const status = config?.lastTestStatus || "untested";
+  const connection = qs<HTMLElement>("#gptConnectionBadge");
+  const message = qs<HTMLElement>("#gptConnectionText");
+  const webSearch = qs<HTMLElement>("#gptWebSearchStatus");
+  if (connection) {
+    connection.textContent = status === "passed" ? "连接通过" : status === "failed" ? "连接失败" : "未测试";
+    connection.className = `badge ${status === "passed" ? "green" : status === "failed" ? "red" : ""}`;
+  }
+  if (message) message.textContent = config?.lastTestMessage || "";
+  if (webSearch) {
+    const webStatus = config?.webSearchStatus;
+    webSearch.className = `ai-web-search-status ${webStatus === "passed" ? "is-ready" : webStatus === "failed" ? "is-blocked" : "is-pending"}`;
+    webSearch.textContent = ({
+      passed: "官网联网测试通过",
+      failed: "官网联网测试失败",
+      unsupported: "官网发现需配置网页搜索或 Google Places",
+      untested: "尚未测试官网联网能力"
+    })[webStatus || "untested"];
+  }
+}
+
+export function bindAiBaseUrlSuggestions() {
+  const dropdown = qs<HTMLSelectElement>("#gptBaseUrlSuggestions");
+  if (!dropdown) return;
+  for (const [id, preset] of Object.entries(aiProviderPresets)) {
+    if (id !== "ollama" && id !== "custom") dropdown.add(new Option(`${preset.label} · ${preset.baseUrl}`, id));
+  }
+  dropdown.addEventListener("change", () => {
+    const preset = aiProviderPresets[dropdown.value];
+    if (!preset) return;
+    setFieldValue("#gptBaseUrlInput", preset.baseUrl);
+    setFieldValue("#gptProtocolSelect", preset.protocol);
+    dropdown.value = "";
   });
 }
 
-function collectAiConfigPayload() {
-  const activeView = qs<HTMLElement>(".view.active")?.id;
-  const useGptPage = activeView === "ai-config" || Boolean(qs<HTMLInputElement>("#gptConfigName")?.matches(":focus"));
-  if (useGptPage) {
-    return {
-      id: state.selectedAiConfigId || undefined,
-      provider: qs<HTMLSelectElement>("#gptProviderSelect")?.value || "openai",
-      protocol: qs<HTMLSelectElement>("#gptProtocolSelect")?.value || "openai-compatible",
-      name: qs<HTMLInputElement>("#gptConfigName")?.value.trim() || "",
-      baseUrl: qs<HTMLInputElement>("#gptBaseUrlInput")?.value.trim() || "",
-      model: qs<HTMLInputElement>("#gptModelInput")?.value.trim() || "",
-      apiKey: qs<HTMLInputElement>("#gptApiKeyInput")?.value.trim() || "",
-      enabled: qs<HTMLSelectElement>("#gptEnabledSelect")?.value !== "false",
-      temperature: Number(qs<HTMLInputElement>("#gptTemperatureInput")?.value || 0.1),
-      useLeadFinder: Boolean(qs<HTMLInputElement>("#aiUseLeadFinder")?.checked),
-      useWebsiteParse: false,
-      useScoring: Boolean(qs<HTMLInputElement>("#aiUseScoring")?.checked),
-      useEmailDraft: Boolean(qs<HTMLInputElement>("#aiUseEmailDraft")?.checked),
-      useExam: Boolean(qs<HTMLInputElement>("#aiUseExam")?.checked)
-    };
-  }
-  return {
-    id: state.selectedAiConfigId || state.aiConfig?.id || undefined,
-    provider: state.aiConfig?.provider || "openai",
-    protocol: state.aiConfig?.protocol || "openai-compatible",
-    name: qs<HTMLInputElement>("#aiConfigName")?.value.trim() || "获客归纳模型",
-    baseUrl: qs<HTMLInputElement>("#aiBaseUrlInput")?.value.trim() || "https://api.openai.com/v1",
-    model: qs<HTMLInputElement>("#aiModelInput")?.value.trim() || "gpt-4o-mini",
-    apiKey: qs<HTMLInputElement>("#aiApiKeyInput")?.value.trim() || "",
-    enabled: Boolean(qs<HTMLInputElement>("#aiEnabledInput")?.checked),
-    temperature: state.aiConfig?.temperature ?? 0.1,
-    useLeadFinder: state.aiConfig?.useLeadFinder ?? true,
-    useWebsiteParse: false,
-    useScoring: state.aiConfig?.useScoring ?? true,
-    useEmailDraft: state.aiConfig?.useEmailDraft ?? true,
-    useExam: state.aiConfig?.useExam ?? false
-  };
-}
-
-export function applyAiProviderPreset(provider: string) {
-  const preset = aiProviderPresets[provider] || aiProviderPresets.custom;
-  const providerSelect = qs<HTMLSelectElement>("#gptProviderSelect");
-  const protocolSelect = qs<HTMLSelectElement>("#gptProtocolSelect");
-  const nameInput = qs<HTMLInputElement>("#gptConfigName");
-  const baseInput = qs<HTMLInputElement>("#gptBaseUrlInput");
-  const modelInput = qs<HTMLInputElement>("#gptModelInput");
-  if (providerSelect) providerSelect.value = provider in aiProviderPresets ? provider : "custom";
-  if (protocolSelect) protocolSelect.value = preset.protocol;
-  if (nameInput) nameInput.value = state.aiDraftMode ? "" : preset.name;
-  if (baseInput) baseInput.value = preset.baseUrl;
-  if (modelInput) modelInput.value = state.aiDraftMode ? "" : preset.model;
-  qsa<HTMLElement>("[data-ai-provider]").forEach((card) => card.classList.toggle("active", card.dataset.aiProvider === provider));
-}
-
-export function newAiConfigDraft(provider = "openai") {
-  const preset = aiProviderPresets[provider] || aiProviderPresets.openai;
+export function newAiConfigDraft() {
+  if (aiConfigBusy) return;
   state.aiDraftMode = true;
   state.selectedAiConfigId = null;
   state.pendingAiDeleteId = null;
-  const nameInput = qs<HTMLInputElement>("#gptConfigName");
-  const apiKeyInput = qs<HTMLInputElement>("#gptApiKeyInput");
-  const enabledSelect = qs<HTMLSelectElement>("#gptEnabledSelect");
-  const tempInput = qs<HTMLInputElement>("#gptTemperatureInput");
-  const providerSelect = qs<HTMLSelectElement>("#gptProviderSelect");
-  const protocolSelect = qs<HTMLSelectElement>("#gptProtocolSelect");
-  const baseInput = qs<HTMLInputElement>("#gptBaseUrlInput");
-  const modelInput = qs<HTMLInputElement>("#gptModelInput");
-  if (providerSelect) providerSelect.value = provider in aiProviderPresets ? provider : "custom";
-  if (protocolSelect) protocolSelect.value = preset.protocol;
-  if (nameInput) nameInput.value = "";
-  if (baseInput) baseInput.value = preset.baseUrl;
-  if (modelInput) modelInput.value = "";
-  if (apiKeyInput) {
-    apiKeyInput.value = "";
-    apiKeyInput.placeholder = "新配置请填写 API Key";
+  ["#gptConfigName", "#gptBaseUrlInput", "#gptModelInput", "#gptApiKeyInput", "#gptBaseUrlSuggestions"].forEach((selector) => setFieldValue(selector, ""));
+  setFieldValue("#gptProtocolSelect", "openai-compatible");
+  setFieldValue("#gptTemperatureInput", "0.1");
+  const key = qs<HTMLInputElement>("#gptApiKeyInput");
+  if (key) {
+    key.type = "password";
+    key.placeholder = "输入 API Key";
   }
-  if (enabledSelect) enabledSelect.value = "false";
-  if (tempInput) tempInput.value = "0.1";
-  ["#aiUseWebsiteParse", "#aiUseScoring", "#aiUseEmailDraft"].forEach((selector) => {
+  const reveal = qs<HTMLButtonElement>("#gptRevealKeyButton");
+  if (reveal) reveal.textContent = "显示";
+  for (const selector of ["#aiUseLeadFinder", "#aiUseScoring", "#aiUseEmailDraft", "#aiUseExam"]) {
     const input = qs<HTMLInputElement>(selector);
-    if (input) input.checked = false;
+    if (input) input.checked = selector !== "#aiUseExam";
+  }
+  renderAiConfig(state.aiConfig);
+  qs<HTMLInputElement>("#gptConfigName")?.focus();
+}
+
+function collectAiConfigPayload(config?: AiModelConfig) {
+  const value = (id: string) => qs<HTMLInputElement | HTMLSelectElement>(`#${id}`)?.value.trim() || "";
+  const checked = (id: string) => Boolean(qs<HTMLInputElement>(`#${id}`)?.checked);
+  const baseUrl = value("gptBaseUrlInput");
+  const protocol = value("gptProtocolSelect");
+  const provider = config?.baseUrl === baseUrl && config.protocol === protocol
+    ? config.provider
+    : Object.entries(aiProviderPresets).find(([, preset]) => preset.baseUrl === baseUrl.replace(/\/+$/, "") && preset.protocol === protocol)?.[0] || "custom";
+  return {
+    id: config?.id,
+    provider,
+    protocol,
+    name: value("gptConfigName"),
+    baseUrl,
+    model: value("gptModelInput"),
+    apiKey: value("gptApiKeyInput"),
+    temperature: Number(value("gptTemperatureInput") || "0.1"),
+    useLeadFinder: checked("aiUseLeadFinder"),
+    useWebsiteParse: false,
+    useScoring: checked("aiUseScoring"),
+    useEmailDraft: checked("aiUseEmailDraft"),
+    useExam: checked("aiUseExam")
+  };
+}
+
+function setAiConfigButtons() {
+  qsa<HTMLButtonElement>('#ai-config [data-ai-settings-panel="model"] button:not(#gptRevealKeyButton)').forEach((button) => {
+    button.disabled = aiConfigBusy || (
+      ["aiToggleEnabledButton", "aiDeleteConfigButton"].includes(button.id) && !state.selectedAiConfigId
+    );
   });
-  const leadFinder = qs<HTMLInputElement>("#aiUseLeadFinder");
-  if (leadFinder) leadFinder.checked = true;
-  const exam = qs<HTMLInputElement>("#aiUseExam");
-  if (exam) exam.checked = false;
-  renderAiConfig(null);
 }
 
-export async function deleteAiConfig(button?: HTMLButtonElement) {
-  if (!state.selectedAiConfigId) {
-    toast("请先选择要删除的配置", "error");
-    return;
-  }
-  const current = state.aiConfigs.find((item) => item.id === state.selectedAiConfigId);
-  if (!current) return;
-  if (state.pendingAiDeleteId !== current.id) {
-    state.pendingAiDeleteId = current.id;
-    renderAiConfig(current);
-    return;
-  }
-  const originalText = button?.textContent || "";
-  if (button) {
-    button.disabled = true;
-    button.textContent = "删除中";
-  }
+async function updateAiConfig(button: HTMLButtonElement, progress: string, action: () => Promise<void>) {
+  if (aiConfigBusy) return;
+  aiConfigBusy = true;
+  const label = button.textContent;
+  button.textContent = progress;
+  setAiConfigButtons();
   try {
-    const result = await api<{ config: AiModelConfig | null; configs: AiModelConfig[] }>(`/api/tools/ai-config/${encodeURIComponent(current.id)}`, { method: "DELETE" });
-    state.aiConfigs = result.configs || [];
-    state.aiConfig = result.config;
-    state.aiDraftMode = false;
-    state.pendingAiDeleteId = null;
-    state.selectedAiConfigId = result.config?.id || state.aiConfigs[0]?.id || null;
-    renderAiConfig(state.aiConfig);
-    await loadLeadProviders();
-    renderLeadFinder(state.websiteOpportunities);
-    toast(`已删除：${current.name}`);
-  } catch (err) {
-    state.pendingAiDeleteId = null;
-    toast(err instanceof Error ? err.message : "删除失败，请重试", "error");
+    await action();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "AI 配置操作失败", "error");
   } finally {
-    if (button) {
-      const selected = state.aiConfigs.find((item) => item.id === state.selectedAiConfigId);
-      button.disabled = state.aiDraftMode || !selected;
-      button.textContent = selected && state.pendingAiDeleteId === selected.id ? "确认删除" : (originalText === "确认删除" ? "删除当前" : originalText || "删除当前");
-    }
+    aiConfigBusy = false;
+    if (button.textContent === progress) button.textContent = label;
+    setAiConfigButtons();
   }
 }
 
-export async function toggleAiConfigEnabled(button?: HTMLButtonElement) {
-  if (state.aiDraftMode || !state.selectedAiConfigId) {
-    toast("请先保存或选择一个配置", "error");
+function applyAiConfigResult(configs: AiModelConfig[], current: AiModelConfig | null, selectedId: string | null) {
+  state.aiConfig = current;
+  state.aiConfigs = configs;
+  state.selectedAiConfigId = selectedId;
+  state.aiDraftMode = false;
+  state.pendingAiDeleteId = null;
+  renderAiConfig(current);
+}
+
+async function refreshLeadFinderModel() {
+  await loadLeadProviders(true);
+  renderLeadFinder(state.websiteOpportunities);
+  syncLeadFinderStartState();
+}
+
+export async function deleteAiConfig(button: HTMLButtonElement) {
+  const id = state.selectedAiConfigId;
+  if (!id || aiConfigBusy) return;
+  if (state.pendingAiDeleteId !== id) {
+    state.pendingAiDeleteId = id;
+    const config = state.aiConfigs.find((item) => item.id === id);
+    const title = qs<HTMLElement>("#aiConfigModeAlert");
+    if (title) title.textContent = `确认删除「${config?.name || "模型"}」`;
+    button.textContent = "确认删除";
     return;
   }
-  const current = state.aiConfigs.find((item) => item.id === state.selectedAiConfigId);
-  if (!current) return;
-  const enabledSelect = qs<HTMLSelectElement>("#gptEnabledSelect");
-  if (enabledSelect) enabledSelect.value = current.enabled ? "false" : "true";
-  await saveAiConfig(button);
+  await updateAiConfig(button, "删除中…", async () => {
+    const result = await api<{ config: AiModelConfig | null; configs: AiModelConfig[] }>(`/api/tools/ai-config/${encodeURIComponent(id)}`, { method: "DELETE" });
+    applyAiConfigResult(result.configs, result.config, result.config?.id || null);
+    await refreshLeadFinderModel();
+    toast("模型配置已删除");
+  });
 }
 
-export async function saveAiConfig(button?: HTMLButtonElement, options: { silent?: boolean } = {}) {
-  const originalText = button?.textContent || "";
-  const payload = collectAiConfigPayload();
-  const selected = state.aiConfigs.find((item) => item.id === state.selectedAiConfigId);
-  const hasSubmittedKey = typeof payload.apiKey === "string" && payload.apiKey.length > 0 && !payload.apiKey.includes("****");
+export async function toggleAiConfigEnabled(button: HTMLButtonElement) {
+  const id = state.selectedAiConfigId;
+  if (!id) return;
+  const enabled = id !== state.aiConfig?.id;
+  await updateAiConfig(button, "保存中…", async () => {
+    const result = await api<AiConfigResponse>(`/api/tools/ai-config/${encodeURIComponent(id)}/current`, {
+      method: "PUT", body: JSON.stringify({ enabled })
+    });
+    applyAiConfigResult(result.configs, result.currentConfig, id);
+    await refreshLeadFinderModel();
+    toast(enabled ? `当前模型已切换为 ${result.config.name}` : "当前模型已停用");
+  });
+}
+
+export async function saveAiConfig(button: HTMLButtonElement, test = false) {
+  const config = state.aiConfigs.find((item) => item.id === state.selectedAiConfigId);
+  const payload = collectAiConfigPayload(config);
   if (!payload.name || !payload.baseUrl || !payload.model) {
     toast("请填写配置名称、Base URL 和模型名称", "error");
     return;
   }
-  if (payload.enabled && !hasSubmittedKey && !selected?.hasApiKey) {
-    toast("请先填写 API Key，再启用该配置", "error");
+  if ((test || config?.enabled) && !payload.apiKey && !config?.hasApiKey) {
+    toast("请先填写 API Key", "error");
     return;
   }
-  if (button) {
-    button.disabled = true;
-    button.textContent = "保存中";
-  }
-  try {
-    const result = await api<{ config: AiModelConfig; configs?: AiModelConfig[] }>("/api/tools/ai-config", {
-      method: "POST",
-      body: JSON.stringify(payload)
+  await updateAiConfig(button, test ? "测试中…" : "保存中…", async () => {
+    const result = await api<AiConfigResponse>("/api/tools/ai-config", {
+      method: "POST", body: JSON.stringify(payload)
     });
-    state.aiConfig = result.config;
-    state.aiConfigs = result.configs || state.aiConfigs.filter((item) => item.id !== result.config.id).concat(result.config);
-    state.selectedAiConfigId = result.config.id;
-    state.aiDraftMode = false;
-    state.pendingAiDeleteId = null;
-    renderAiConfig(result.config);
-    await loadLeadProviders();
-    renderLeadFinder(state.websiteOpportunities);
-    syncLeadFinderStartState();
-    if (!options.silent) toast(result.config.enabled ? `已保存并启用：${result.config.name}` : `已保存：${result.config.name}`);
-  } finally {
-    if (button) {
-      button.disabled = false;
-      if (button.id === "aiToggleEnabledButton") {
-        button.textContent = state.aiConfig?.enabled ? "停用当前" : "启用当前";
+    applyAiConfigResult(result.configs, result.currentConfig, result.config.id);
+    try {
+      if (test) {
+        const tested = await api<AiConfigResponse & { ok: boolean; message: string }>("/api/tools/ai-config/test", {
+          method: "POST", body: JSON.stringify({ id: result.config.id })
+        });
+        applyAiConfigResult(tested.configs, tested.currentConfig, tested.config.id);
+        toast(tested.message, tested.ok ? "ok" : "error");
       } else {
-        button.textContent = originalText || "保存AI配置";
+        toast(`已保存：${result.config.name}`);
       }
+    } finally {
+      await refreshLeadFinderModel();
     }
-  }
-}
-
-export async function testAiConfig(button?: HTMLButtonElement) {
-  const originalText = button?.textContent || "";
-  const testHero = qs<HTMLElement>("#aiTestResultHero");
-  const testBadge = qs<HTMLElement>("#gptConnectionBadge");
-  const testTitle = qs<HTMLElement>("#gptConnectionTitle");
-  const testText = qs<HTMLElement>("#gptConnectionText");
-  // 立即进入“测试中”呼吸态，确保点击即有反馈（不依赖保存是否成功）
-  aiTestingActive = true;
-  if (button) {
-    button.disabled = true;
-    button.textContent = "测试中";
-    button.classList.add("is-testing");
-  }
-  if (testHero) testHero.classList.add("is-testing");
-  if (testBadge) { testBadge.className = "badge"; testBadge.textContent = "测试中…"; }
-  if (testTitle) testTitle.textContent = "正在测试连接…";
-  if (testText) testText.textContent = "正在向模型接口发起请求，请稍候";
-  try {
-    // 保存失败不阻断测试：测试接口会基于已保存配置或内存草稿校验
-    await saveAiConfig(undefined, { silent: true }).catch(() => {});
-    const result = await api<{ ok: boolean; message: string; config?: AiModelConfig; configs?: AiModelConfig[] }>("/api/tools/ai-config/test", {
-      method: "POST",
-      body: JSON.stringify({ id: state.selectedAiConfigId || undefined })
-    });
-    if (result.config) {
-      state.aiConfig = result.config;
-      state.aiConfigs = result.configs || state.aiConfigs.map((item) => item.id === result.config?.id ? result.config : item);
-      state.selectedAiConfigId = result.config.id;
-      renderAiConfig(result.config);
-      await loadLeadProviders();
-      renderLeadFinder(state.websiteOpportunities);
-      syncLeadFinderStartState();
-    }
-    if (!result.config) {
-      const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
-      const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
-      const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
-      if (gptConnectionBadge) {
-        gptConnectionBadge.className = `badge ${result.ok ? "green" : "red"}`;
-        gptConnectionBadge.textContent = result.ok ? "连接通过" : "连接失败";
-      }
-      if (gptConnectionTitle) gptConnectionTitle.textContent = result.ok ? "AI 连接测试通过" : "AI 连接测试失败";
-      if (gptConnectionText) gptConnectionText.textContent = result.message;
-    }
-    toast(result.message, result.ok ? "ok" : "error");
-  } catch (err) {
-    const gptConnectionBadge = qs<HTMLElement>("#gptConnectionBadge");
-    const gptConnectionTitle = qs<HTMLElement>("#gptConnectionTitle");
-    const gptConnectionText = qs<HTMLElement>("#gptConnectionText");
-    const msg = err instanceof Error ? err.message : "测试失败";
-    if (gptConnectionBadge) { gptConnectionBadge.className = "badge red"; gptConnectionBadge.textContent = "连接失败"; }
-    if (gptConnectionTitle) gptConnectionTitle.textContent = "AI 连接测试失败";
-    if (gptConnectionText) gptConnectionText.textContent = msg;
-    toast(msg, "error");
-  } finally {
-    aiTestingActive = false;
-    if (button) {
-      button.disabled = false;
-      button.classList.remove("is-testing");
-      button.textContent = originalText || "测试连接";
-    }
-    if (testHero) testHero.classList.remove("is-testing");
-  }
+  });
 }

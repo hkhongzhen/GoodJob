@@ -2441,7 +2441,7 @@ test.describe("GoodJob CRM prototype pages", () => {
 
     await aiChip.click();
     await expect(page.locator("#ai-config")).toHaveClass(/active/);
-    await expect(page.locator(".toast").last()).toContainText("启用模型");
+    await expect(page.locator(".toast").last()).toContainText("设为当前模型");
 
     await openView(page, "lead-finder");
     await readyChip.click();
@@ -2892,6 +2892,8 @@ test.describe("GoodJob CRM prototype pages", () => {
       defaultBaseUrl: "https://google.serper.dev",
       costNote: "自带 Key",
       hasApiKey: true,
+      supportsMultipleKeys: true,
+      apiKeys: [{ id: "a".repeat(64), suffix: "1234" }],
       ready: true,
       enabled: true,
       lastTestStatus: "passed",
@@ -2906,7 +2908,20 @@ test.describe("GoodJob CRM prototype pages", () => {
         body: JSON.stringify({ providers: [provider] })
       });
     });
+    const existingSaveRequests: string[] = [];
+    await page.route("**/api/lead-finder/source-config", async (route) => {
+      existingSaveRequests.push(route.request().method());
+      await route.abort();
+    });
     await page.route("**/api/lead-finder/source-config/test", async (route) => {
+      const { apiKey } = route.request().postDataJSON();
+      if (apiKey === "test-backup-5678") {
+        await route.fulfill({ json: {
+          ok: true, message: "连接通过，已保存并启用", usage: "", retryable: false, retryAfterAt: null,
+          providers: [{ ...provider, apiKeys: [...provider.apiKeys, { id: "b".repeat(64), suffix: "5678" }] }]
+        } });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -2936,6 +2951,14 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".toast").last()).toContainText("数据源当前限流");
     await expect(page.locator(".toast").last()).toContainText("后可重试");
     await expect(testButton).toBeEnabled();
+    const keyInput = page.locator("[data-ls-key='serper']");
+    await keyInput.fill("test-backup-5678");
+    await expect(testButton).toHaveText("测试并启用");
+    await testButton.click();
+    await expect(page.locator("#aiLeadSourceCards")).toContainText("••••5678");
+    await expect(page.locator("[data-ls-delete='serper']")).toHaveCount(2);
+    await expect(keyInput).toHaveValue("");
+    expect(existingSaveRequests).toEqual([]);
   });
 
   test("lead finder page sends unresolved references into authoritative qualification", async ({ page }) => {
@@ -3651,29 +3674,72 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator(".prospect-probe-panel")).not.toContainText("部分完成");
   });
 
-  test("ai config page saves GPT API key and tests connectivity", async ({ page }) => {
+  test("AI settings keep one current model and scope lead finder shortcuts", async ({ page }) => {
     await openView(page, "ai-config");
-    await expect(page.locator("#ai-config .page-head")).toContainText("AI模型配置");
-    await expect(page.locator("#ai-config")).toContainText("OpenAI GPT");
+    const modelPanel = page.locator('[data-ai-settings-panel="model"]');
+    const sourcePanel = page.locator('[data-ai-settings-panel="sources"]');
+    const providerSetup = page.locator("#aiLeadSourceCards");
+    const first = `模型 A ${runId}`;
+    const second = `模型 B ${runId}`;
 
-    await page.locator("#gptConfigName").fill(`自动化GPT配置-${runId}`);
-    await page.locator("#gptBaseUrlInput").fill("https://example.com/v1");
-    await page.locator("#gptModelInput").fill("gpt-4o-mini");
-    await page.locator("#gptApiKeyInput").fill(`sk-test-${runId}`);
-    await page.locator("#gptEnabledSelect").selectOption("true");
-    await page.locator("#gptSaveButton").click();
-    await expect(page.locator(".toast").last()).toContainText("已保存并启用");
-    await expect(page.locator("#gptApiKeyInput")).toHaveValue(/\\*\\*\\*\\*/);
-    await expect(page.locator("#gptConfigState")).toContainText("已启用");
-    await expect(page.locator("#aiConfigList")).toContainText(`自动化GPT配置-${runId}`);
+    async function addModel(name: string, model: string) {
+      await page.locator("#aiNewConfigButton").click();
+      await page.locator("#gptConfigName").fill(name);
+      await page.locator("#gptBaseUrlSuggestions").selectOption("openai");
+      await expect(page.locator("#gptBaseUrlInput")).toHaveValue("https://api.openai.com/v1");
+      await page.locator("#gptModelInput").fill(model);
+      await page.locator("#gptApiKeyInput").fill(`sk-test-${runId}`);
+      await page.locator("#gptSaveButton").click();
+      await expect(page.locator("#aiConfigList")).toContainText(name);
+      await expect(page.locator("#gptApiKeyInput")).toHaveValue("");
+    }
 
-    await page.locator("#gptTestButton").click();
-    await expect(page.locator("#gptConnectionBadge")).toContainText("连接失败");
-    await expect(page.locator(".toast").last()).toContainText("AI 连接失败");
+    await addModel(first, "gpt-4o-mini");
+    await page.locator("#aiToggleEnabledButton").click();
+    await expect(page.locator("#aiConfigList button").filter({ hasText: first })).toContainText("当前模型");
+    await addModel(second, "gpt-4o");
+    await expect(page.locator("#aiConfigList button").filter({ hasText: first })).toContainText("当前模型");
+    await page.locator("#aiToggleEnabledButton").click();
+    await expect(page.locator("#aiConfigList button").filter({ hasText: second })).toContainText("当前模型");
+    await expect(page.locator("#aiConfigList button").filter({ hasText: first })).not.toContainText("当前模型");
 
-    await page.locator("#topSearchInput").fill("gpt");
-    await page.locator("#topSearchInput").press("Enter");
-    await expect(page.locator("#ai-config")).toHaveClass(/active/);
+    await page.reload();
+    await expect(page.locator("#aiConfigList button").filter({ hasText: second })).toContainText("当前模型");
+    await page.locator("#aiToggleEnabledButton").click();
+    await expect(page.locator("#aiConfigList")).not.toContainText("当前模型");
+
+    async function openSuperSearch() {
+      await openView(page, "lead-finder");
+      await page.locator('[data-lead-search-mode="super"]').click();
+    }
+
+    await openSuperSearch();
+    await page.locator("#leadSuperWebConfig").click();
+    await expect(sourcePanel).toBeVisible();
+    await expect(modelPanel).toBeHidden();
+    await expect(page.locator("#aiLeadSourcesTitle")).toHaveText("网页搜索来源");
+    await expect(providerSetup.locator('[data-ls-key="brave"]')).toBeVisible();
+    await expect(providerSetup.locator('[data-ls-key="google_places"]')).toHaveCount(0);
+
+    await openSuperSearch();
+    await page.locator("#leadSuperMapConfig").click();
+    await expect(page.locator("#aiLeadSourcesTitle")).toHaveText("Google Places");
+    await expect(providerSetup.locator(".ls-card")).toHaveCount(1);
+    await expect(providerSetup.locator('[data-ls-key="google_places"]')).toBeVisible();
+
+    await openSuperSearch();
+    await page.locator("#leadSuperAiConfig").click();
+    await expect(modelPanel).toBeVisible();
+    await expect(sourcePanel).toBeHidden();
+    await expect(page.locator('[data-ai-settings-panel="verification"]')).toBeHidden();
+    await expect(page.locator('[data-ai-settings-panel="engine"]')).toBeHidden();
+
+    await page.locator('[data-ai-settings-tab="verification"]').click();
+    await expect(page.locator("#emailVerifyStatus")).toContainText("预筛");
+    await expect(page.locator("#emailVerifyProvider option[value=none]")).toHaveCount(0);
+    await page.locator('[data-ai-settings-tab="engine"]').click();
+    await expect(page.locator("#aiEngineCliStatus")).toContainText(/Runner|未就绪/);
+    await expect(page.locator("#aiEngineSaveButton")).toBeDisabled();
   });
 
   test("whatsapp workspace starts a customer conversation and records messages", async ({ page }) => {

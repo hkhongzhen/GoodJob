@@ -1,3 +1,4 @@
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { callAiModel } from "./ai-model-runtime.js";
@@ -41,9 +42,7 @@ function event(run: SalesTrainingRun, stage: SalesTrainingStatus, message: strin
 }
 
 function selectedModel(store: CrmStore, actorId: string, teamId: string): AiModelConfig | undefined {
-  return store.aiModelConfigs
-    .filter((item) => item.ownerId === actorId && item.teamId === teamId && item.enabled && item.apiKey)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return currentAiModelConfig(store, actorId, teamId);
 }
 
 function metricsForSource(store: CrmStore, source: User, periodDays: number): SalesDistillationMetrics {

@@ -7,7 +7,7 @@
 import { emailVerificationBadge, refreshMailToVerify } from "./email-verification";
 import { isLeadSourceExecutable } from "../lead-source-selection";
 import { type ProspectRadarCandidate, type ProspectRadarController, type ProspectRadarFrame, type ProspectRadarFrameTone, type ProspectRadarModel, type ProspectRadarRelation } from "../prospect-radar";
-import { activateNavView, closeModal, leadBriefMode, leadFinderJobs, openModal, renderProspectList, state } from "../prototype-api";
+import { activateNavView, closeModal, leadBriefMode, leadFinderJobs, openAiSettings, openModal, renderProspectList, state } from "../prototype-api";
 import {
   type AiEngineJobView, type DealRecommendation, type EmailEngineSource, type LeadFinderJob,
   type LeadFinderSourceStat, type LeadSyncResult, type LeadTaskStreamLog, type ProcurementContext,
@@ -2948,7 +2948,7 @@ export async function toggleSuperWebSearch(enabled: boolean) {
     } else {
       checkbox.checked = false;
       renderSuperWebSearchOption();
-      openLeadSourceCenter(superWebProviders()[0]?.id);
+      openAiSettings("sources", { kind: "web" });
       toast("请先配置并启用一个 Web Search API", "error");
       return;
     }
@@ -3002,10 +3002,8 @@ export async function toggleSuperAiDiscovery(enabled: boolean) {
   if (!isLeadSourceExecutable(provider)) {
     checkbox.checked = false;
     renderSuperAiDiscoveryOption();
-    activateNavView("ai-config", () => {
-      qs<HTMLInputElement>("#gptApiKeyInput")?.focus();
-      toast("启用模型并勾选自动获客后，即可使用 AI 深度发现", "error");
-    });
+    openAiSettings("model");
+    toast("设为当前模型并开启「自动获客」后，即可使用 AI 深度发现", "error");
     return;
   }
   state.selectedLeadSources = [...new Set([...state.selectedLeadSources, "ai_search"])];

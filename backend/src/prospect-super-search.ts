@@ -1,3 +1,4 @@
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canSeeOwner, isPlatformIdentity } from "./auth.js";
@@ -740,21 +741,8 @@ async function startRound(
   // 首轮先按用户已经确认的规则立即入队，避免可选 AI 扩词阻塞任务启动。
   // 从第二轮开始，AI 会结合真实覆盖缺口继续扩展查询。
   if (!deepTask && roundNo > 1 && mission.aiMode === "auto") {
-    const config = store.aiModelConfigs
-      .filter((item) =>
-        item.ownerId === mission.ownerId
-        && item.teamId === mission.teamId
-        && item.enabled
-        && item.apiKey
-        && item.useLeadFinder !== false
-      )
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
-    if (config) {
-      appendEvent(store, mission, "ai_planning_started", `AI 正在结合第 ${roundNo - 1} 轮结果规划第 ${roundNo} 轮查询`, {
-        roundNo,
-        timeoutMs: superSearchAiPlanningTimeoutMs()
-      });
-      await persistSuperSearchState(store);
+    const config = currentAiModelConfig(store, mission.ownerId, mission.teamId);
+    if (config && config.useLeadFinder !== false) {
       try {
         const content = await callAiModel(config, [
           "你是外贸 B2B 查询规划器，只补充搜索表达，不生成公司、联系人、邮箱、电话或网址。",

@@ -7,9 +7,10 @@ interface ProviderCredentialContext {
   teamId: string;
 }
 
-interface ProviderConfiguration {
+export interface ProviderConfiguration {
   apiKey: string;
   baseUrl: string;
+  backupApiKeys?: string[];
 }
 
 interface AiModelCredentialContext {
@@ -164,7 +165,10 @@ export function decryptProviderConfiguration(
   const value = JSON.parse(decrypted.toString("utf8")) as Partial<ProviderConfiguration>;
   return {
     apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
-    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : ""
+    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+    ...(Array.isArray(value.backupApiKeys)
+      ? { backupApiKeys: value.backupApiKeys.filter((key) => typeof key === "string") }
+      : {})
   };
 }
 

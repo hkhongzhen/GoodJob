@@ -41,6 +41,7 @@ let aiEngineAdapterAvailability: Record<string, boolean> = {};
  */
 let aiEngineCliDrafts: Record<string, { model: string; effort: string }> = {};
 let aiEngineSettingsLoaded = false;
+let canManageAiEngineSettings = false;
 
 // ---------------------------------------------------------------------------
 // AI 执行来源（背调 / 开发信由谁干）
@@ -114,6 +115,7 @@ export async function loadAiEngineSettings() {
     cliReady: boolean;
   }>("/api/ai-engine/settings");
   aiEngineSettings = result.settings;
+  canManageAiEngineSettings = result.canManage;
   aiEngineRunners = result.runners || [];
   aiEngineCliModels = result.cliModels || [];
   aiEngineCliEfforts = result.cliEfforts || [];
@@ -137,7 +139,7 @@ export async function ensureAiEngineSettings() {
   }
 }
 
-function renderAiEngineSettings() {
+export function renderAiEngineSettings() {
   renderEngineSourcePicker(qs<HTMLSelectElement>("#aiEngineResearchSource"), "research", aiEngineSettings.researchSource);
   renderEngineSourcePicker(qs<HTMLSelectElement>("#aiEngineEmailSource"), "email", aiEngineSettings.emailSource);
   const adapter = qs<HTMLSelectElement>("#aiEngineCliAdapter");
@@ -172,9 +174,9 @@ function renderAiEngineSettings() {
     runner.value = aiEngineSettings.runnerId || "";
   }
   renderAiEngineCliStatus(aiEngineSettings.cliAdapter);
-  const disable = !teamSystemSettingsCanManage;
-  ["#aiEngineResearchSource", "#aiEngineEmailSource", "#aiEngineCliAdapter", "#aiEngineCliModel", "#aiEngineCliEffort", "#aiEngineCliWorkspace", "#aiEngineCliTimeout", "#aiEngineRunner"]
-    .forEach((selector) => { const node = qs<HTMLInputElement | HTMLSelectElement>(selector); if (node) node.disabled = disable; });
+  const disable = !canManageAiEngineSettings;
+  ["#aiEngineResearchSource", "#aiEngineEmailSource", "#aiEngineCliAdapter", "#aiEngineCliModel", "#aiEngineCliEffort", "#aiEngineCliWorkspace", "#aiEngineCliTimeout", "#aiEngineRunner", "#aiEngineSaveButton"]
+    .forEach((selector) => { const node = qs<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(selector); if (node) node.disabled = disable; });
 }
 
 function aiEngineAdapterName(adapter: string) {
@@ -277,7 +279,7 @@ function renderAiEngineCliStatus(adapter: string) {
 }
 
 export async function saveAiEngineSettings(button?: HTMLButtonElement) {
-  if (!teamSystemSettingsCanManage) return;
+  if (!canManageAiEngineSettings) return;
   const selectedAdapter = qs<HTMLSelectElement>("#aiEngineCliAdapter")?.value || aiEngineSettings.cliAdapter;
   stashAiEngineCliDraft(selectedAdapter);
   const payload = {
@@ -437,7 +439,6 @@ export function renderTeamSystemSettings() {
     providerStatus.className = `badge ${tradeDocumentOcrProvider.enabled ? "green" : "amber"}`;
     providerStatus.textContent = tradeDocumentOcrProvider.enabled ? `已启用：${tradeDocumentOcrProvider.provider === "baidu" ? "百度 OCR" : "硅基流动视觉"}` : "未启用，使用 AI 视觉模型";
   }
-  renderAiEngineSettings();
 }
 
 export function launchCustomerContact(customer: Customer, channel: "email" | "phone" | "whatsapp" | "wechat") {

@@ -1,3 +1,4 @@
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { callGovernedAgentModel } from "./agent-model-governance.js";
@@ -320,9 +321,7 @@ function visibleLeads(store: CrmStore, user: AgentActor) {
 }
 
 function selectedModel(store: CrmStore, user: AgentActor): AiModelConfig | undefined {
-  return store.aiModelConfigs
-    .filter((item) => item.ownerId === user.id && item.teamId === user.teamId && item.enabled && item.apiKey)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return currentAiModelConfig(store, user.id, user.teamId);
 }
 
 export function agentMissionContextSnapshots(runs: AgentRun[], limit = 4): AgentMissionContextSnapshot[] {

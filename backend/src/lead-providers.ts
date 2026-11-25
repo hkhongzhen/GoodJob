@@ -342,6 +342,12 @@ const anysearch = defineProvider({
   }
 });
 
+async function serperHttpError(response: Response) {
+  const body = await response.json().catch(() => null) as { message?: unknown } | null;
+  const message = typeof body?.message === "string" ? body.message : "";
+  return providerHttpStatusError(response, "Serper", { upstreamMessage: message });
+}
+
 const serper = defineProvider({
   id: "serper",
   name: "Serper (Google)",
@@ -366,7 +372,7 @@ const serper = defineProvider({
       headers: { "X-API-KEY": cred.apiKey, "content-type": "application/json" },
       body: JSON.stringify({ q: webQueryText(query), num: Math.min(query.limit, 20), gl, hl: "en" })
     });
-    if (!response.ok) throw providerHttpStatusError(response, "Serper");
+    if (!response.ok) throw await serperHttpError(response);
     const data = (await response.json()) as { organic?: Array<{ title?: string; link?: string; snippet?: string }> };
     const leads = (data.organic || [])
       .map((item) => webResultToLead(item.title || "", item.link || "", item.snippet || "", query))
@@ -380,7 +386,7 @@ const serper = defineProvider({
       headers: { "X-API-KEY": cred.apiKey, "content-type": "application/json" },
       body: JSON.stringify({ q: "industrial product supplier", num: 1 })
     });
-    if (!response.ok) throw providerHttpStatusError(response, "Serper");
+    if (!response.ok) throw await serperHttpError(response);
     return { ok: true, message: "Serper 连接通过，可用于 Web 搜客" };
   }
 });

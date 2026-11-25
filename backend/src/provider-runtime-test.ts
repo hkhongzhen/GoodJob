@@ -222,6 +222,58 @@ assert.equal(successPage.records[0]?.officialWebsite, "https://acme.example/");
 assert.equal(successPage.records[0]?.sourceUrl, "https://registry.example/acme");
 assert.equal(successPage.records[0]?.recordType, "identity_evidence");
 
+const pooledSerper = getProvider("serper")!;
+const pooledConnection = adapterConnection(pooledSerper);
+pooledConnection.configurationEncrypted = encryptProviderConfiguration(pooledConnection, {
+  apiKey: "empty-credits", baseUrl: "", backupApiKeys: ["limited-key", "available-key"]
+});
+const keyAttempts: string[] = [];
+const poolLogs: ProviderRequestLog[] = [];
+let backupStatus = 200;
+setProviderHttpTestTransport(async (_url, init) => {
+  const key = new Headers(init?.headers).get("x-api-key") || "";
+  keyAttempts.push(key);
+  if (key === "empty-credits") return new Response(JSON.stringify({ message: "Not enough credits." }), { status: 403 });
+  if (key === "limited-key") return new Response("", { status: 429, headers: { "Retry-After": "120" } });
+  return new Response(JSON.stringify({ organic: [] }), { status: backupStatus });
+});
+try {
+  const search = () => executeProviderSearch({
+    provider: pooledSerper, catalog: catalog(pooledSerper), context: context(pooledSerper.id),
+    connection: pooledConnection, query, onLogs: (items) => poolLogs.push(...items)
+  });
+  assert.equal((await search()).status, "success_empty");
+  assert.deepEqual(keyAttempts, ["empty-credits", "limited-key", "available-key"]);
+  assert.deepEqual(poolLogs.map((log) => log.httpStatus), [403, 429, 200]);
+  assert.equal(JSON.stringify(poolLogs).includes("available-key"), false);
+
+  keyAttempts.length = 0;
+  assert.equal((await search()).status, "success_empty");
+  assert.deepEqual(keyAttempts, ["available-key"]);
+
+  backupStatus = 402;
+  await assert.rejects(search(), (error) =>
+    error instanceof ProviderContractError && error.code === "PROVIDER_RATE_LIMITED"
+    && Boolean(error.retryAfterAt)
+  );
+  keyAttempts.length = 0;
+  await expectCode(search(), "PROVIDER_RATE_LIMITED");
+  assert.deepEqual(keyAttempts, []);
+
+  const rejectedConnection = { ...pooledConnection, credentialRef: "different-connection" };
+  setProviderHttpTestTransport(async (_url, init) => {
+    keyAttempts.push(new Headers(init?.headers).get("x-api-key") || "");
+    return new Response("", { status: 403 });
+  });
+  await expectCode(executeProviderSearch({
+    provider: pooledSerper, catalog: catalog(pooledSerper), context: context(pooledSerper.id),
+    connection: rejectedConnection, query, onLogs() {}
+  }), "PROVIDER_AUTH_FAILED");
+  assert.deepEqual(keyAttempts, ["empty-credits"]);
+} finally {
+  setProviderHttpTestTransport(null);
+}
+
 const emptyProvider = provider("empty_provider", async () => ({ records: [] }));
 const emptyPage = await executeProviderSearch({
   provider: emptyProvider,

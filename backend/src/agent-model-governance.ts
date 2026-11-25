@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { callAiModel } from "./ai-model-runtime.js";
 import type { AgentActor, AgentPlanContext, AgentRun } from "./ai-agent.js";
 import { GJAB_VERSION, runGjabPlanBenchmark } from "./agent-benchmark.js";
@@ -19,20 +20,6 @@ function estimatedCost(inputTokens: number, outputTokens: number) {
   const inputRate = positiveNumber(process.env.AGENT_INPUT_USD_PER_MILLION_TOKENS, 0.5);
   const outputRate = positiveNumber(process.env.AGENT_OUTPUT_USD_PER_MILLION_TOKENS, 1.5);
   return Number(((inputTokens * inputRate + outputTokens * outputRate) / 1_000_000).toFixed(6));
-}
-
-function routeValue(purpose: AgentModelCallPurpose) {
-  return purpose === "planning" ? process.env.AGENT_MODEL_ROUTE_PLANNING : process.env.AGENT_MODEL_ROUTE_EVALUATION;
-}
-
-export function agentModelCandidates(store: CrmStore, actor: AgentActor, purpose: AgentModelCallPurpose, preferred?: AiModelConfig) {
-  const enabled = store.aiModelConfigs
-    .filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId && item.enabled && item.apiKey)
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  const route = (routeValue(purpose) || "").trim();
-  const routed = route ? enabled.find((item) => item.id === route || item.model === route) : undefined;
-  const ordered = [routed, preferred, ...enabled].filter((item): item is AiModelConfig => Boolean(item));
-  return ordered.filter((item, index) => ordered.findIndex((entry) => entry.id === item.id) === index).slice(0, 3);
 }
 
 function budgetUsage(store: CrmStore, actor: AgentActor, runId: string) {
@@ -59,24 +46,35 @@ export async function callGovernedAgentModel(input: {
   const usage = budgetUsage(input.store, input.actor, input.runId);
   if (usage.daily >= dailyBudget) throw new Error("Agent 今日模型预算已用尽");
   if (usage.mission >= missionBudget) throw new Error("当前 Mission 模型预算已用尽");
-  const candidates = agentModelCandidates(input.store, input.actor, input.purpose, input.preferred);
-  let lastError: Error | null = null;
-  for (const [routeIndex, config] of candidates.entries()) {
-    const startedAt = Date.now();
-    const inputTokens = estimatedTokens(input.prompt.slice(0, input.maxInputChars));
-    try {
-      const content = await callAiModel(config, input.prompt, input.maxInputChars, input.fetcher);
-      const outputTokens = estimatedTokens(content);
-      input.store.agentModelCalls.unshift({ id: `agmc_${randomUUID()}`, runId: input.runId, ownerId: input.actor.id, teamId: input.actor.teamId, purpose: input.purpose, configId: config.id, provider: config.provider, model: config.model, routeIndex, success: true, inputTokens, outputTokens, estimatedCostUsd: estimatedCost(inputTokens, outputTokens), latencyMs: Date.now() - startedAt, error: "", createdAt: new Date().toISOString() });
-      await input.store.persist();
-      return content;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error("模型调用失败");
-      input.store.agentModelCalls.unshift({ id: `agmc_${randomUUID()}`, runId: input.runId, ownerId: input.actor.id, teamId: input.actor.teamId, purpose: input.purpose, configId: config.id, provider: config.provider, model: config.model, routeIndex, success: false, inputTokens, outputTokens: 0, estimatedCostUsd: 0, latencyMs: Date.now() - startedAt, error: lastError.message.slice(0, 500), createdAt: new Date().toISOString() });
-      await input.store.persist();
-    }
+  const config = currentAiModelConfig(input.store, input.actor.id, input.actor.teamId);
+  if (!config) throw new Error("没有可用的 Agent 模型");
+  if (config.id !== input.preferred.id) throw new Error("当前模型已变更，请重试");
+  const startedAt = Date.now();
+  const inputTokens = estimatedTokens(input.prompt.slice(0, input.maxInputChars));
+  const call = {
+    id: `agmc_${randomUUID()}`, runId: input.runId, ownerId: input.actor.id, teamId: input.actor.teamId,
+    purpose: input.purpose, configId: config.id, provider: config.provider, model: config.model,
+    routeIndex: 0, inputTokens, createdAt: new Date().toISOString()
+  };
+  let content: string;
+  try {
+    content = await callAiModel(config, input.prompt, input.maxInputChars, input.fetcher);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "模型调用失败";
+    input.store.agentModelCalls.unshift({
+      ...call, success: false, outputTokens: 0, estimatedCostUsd: 0,
+      latencyMs: Date.now() - startedAt, error: message.slice(0, 500)
+    });
+    await input.store.persist();
+    throw error;
   }
-  throw lastError || new Error("没有可用的 Agent 模型");
+  const outputTokens = estimatedTokens(content);
+  input.store.agentModelCalls.unshift({
+    ...call, success: true, outputTokens, estimatedCostUsd: estimatedCost(inputTokens, outputTokens),
+    latencyMs: Date.now() - startedAt, error: ""
+  });
+  await input.store.persist();
+  return content;
 }
 
 export function agentModelMetrics(store: CrmStore, actor: AgentActor) {
@@ -89,7 +87,7 @@ export function agentModelMetrics(store: CrmStore, actor: AgentActor) {
   return {
     last24Hours: { calls: recent.length, successes: success.length, failures: recent.length - success.length, fallbackCalls: recent.filter((item) => item.routeIndex > 0).length, successRate: recent.length ? Math.round(success.length / recent.length * 100) : 0, averageLatencyMs: success.length ? Math.round(success.reduce((sum, item) => sum + item.latencyMs, 0) / success.length) : 0, totalTokens, estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)) },
     budgets: { dailyUsd: positiveNumber(process.env.AGENT_DAILY_BUDGET_USD, 10), missionUsd: positiveNumber(process.env.AGENT_MISSION_BUDGET_USD, 2) },
-    routes: { planning: routeValue("planning") || "当前主模型", evaluation: routeValue("evaluation") || "当前主模型", fallbackEnabled: true },
+    routes: { planning: "当前模型", evaluation: "当前模型", fallbackEnabled: false },
     recentCalls: recent.slice(0, 30),
     evaluations: store.agentEvaluationRuns.filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId).slice(0, 10)
   };

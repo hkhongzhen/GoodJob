@@ -1,3 +1,4 @@
+import { currentAiModelConfig } from "./ai-model-selection.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { callAiModel } from "./ai-model-runtime.js";
@@ -16,7 +17,7 @@ function canAccessSource(actor: DistillationActor, source: User) {
 }
 
 function selectedModel(store: CrmStore, actor: DistillationActor): AiModelConfig | undefined {
-  return store.aiModelConfigs.filter((item) => item.ownerId === actor.id && item.teamId === actor.teamId && item.enabled && item.apiKey).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  return currentAiModelConfig(store, actor.id, actor.teamId);
 }
 
 function metricSnapshot(store: CrmStore, source: User, periodDays: number): SalesDistillationMetrics {
