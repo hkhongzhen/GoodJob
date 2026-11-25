@@ -2320,6 +2320,144 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#leadTrashButton")).toHaveCount(0);
   });
 
+  test("mail center opens the linked lead for follow-up", async ({ page }) => {
+    test.setTimeout(60_000);
+    const company = `Mail Reply Lead ${runId}`;
+    const { lead } = await apiFromPage<{ lead: { id: string } }>(page, "/api/leads", {
+      method: "POST", body: { company, email: "buyer@example.com" }
+    });
+    const reply = {
+      id: "linked-reply", mailboxId: "test-box", mailboxEmail: "sales@example.com",
+      direction: "inbound", subject: "Re: Product inquiry", fromAddress: "buyer@example.com",
+      fromName: "Test Buyer", toAddresses: ["sales@example.com"], ccAddresses: [],
+      bodyText: "Please follow up next week.", snippet: "Please follow up next week.",
+      sentAt: new Date().toISOString(), readAt: new Date().toISOString(),
+      hasAttachments: false, sizeBytes: 50, entityType: "lead", entityId: lead.id
+    };
+    const unmatched = { ...reply, id: "unmatched-reply", subject: "General message", entityType: "", entityId: "" };
+    const sent = { ...unmatched, id: "sent-reply", subject: "Sent inquiry", direction: "outbound",
+      toAddresses: ["buyer@example.com"], fromAddress: "sales@example.com" };
+    let inbox = [reply, unmatched];
+    let trash: typeof inbox = [];
+    await page.route("**/api/mail-center/**", async (route) => {
+      const { pathname: path, searchParams } = new URL(route.request().url());
+      if (path.endsWith("/accounts")) return route.fulfill({ json: { accounts: [] } });
+      if (path.endsWith("/folders")) return route.fulfill({ json: { folders: [] } });
+      if (path.endsWith("/contact")) {
+        expect(searchParams.get("email")).toBe("buyer@example.com");
+        return route.fulfill({ json: { entityId: lead.id } });
+      }
+      if (path.endsWith("/actions")) {
+        const { action, ids } = route.request().postDataJSON();
+        expect(ids).toEqual([reply.id]);
+        if (action === "trash") {
+          trash = [reply];
+          inbox = [unmatched];
+        } else {
+          expect(action).toBe("delete");
+          trash = [];
+        }
+        return route.fulfill({ json: { succeeded: ids, failed: [] } });
+      }
+      if (path.endsWith("/messages")) {
+        const folder = searchParams.get("folder");
+        const messages = folder === "trash" ? trash : folder === "sent" ? [sent] : inbox;
+        return route.fulfill({ json: { messages, total: messages.length } });
+      }
+      if (path.endsWith("/linked-reply")) return route.fulfill({ json: { message: reply } });
+      if (path.endsWith("/unmatched-reply")) return route.fulfill({ json: { message: unmatched } });
+      if (path.endsWith("/sent-reply")) return route.fulfill({ json: { message: sent } });
+      return route.fallback();
+    });
+
+    await openView(page, "mail-center");
+    const row = page.locator('[data-mc-message="linked-reply"]');
+    await expect(row).toContainText("已归属线索");
+    await row.click();
+    const readingPane = page.locator("#mcMessageDetail");
+    await readingPane.getByRole("button", { name: "查看线索详情" }).click();
+    const drawer = page.locator("#leadDrawer");
+    await expect(drawer.getByRole("heading", { name: company })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "转为客户" })).toBeVisible();
+    await drawer.locator("#leadNoteType").selectOption("email");
+    await drawer.locator("#leadNoteInput").fill("客户要求下周跟进");
+    await drawer.getByRole("button", { name: "记录跟进" }).click();
+    await expect(drawer).toContainText("客户要求下周跟进");
+
+    await openView(page, "mail-center");
+    await expect(readingPane.getByRole("heading", { name: reply.subject })).toBeVisible();
+    await page.locator('[data-mc-message="unmatched-reply"]').click();
+    await expect(readingPane.getByRole("heading", { name: unmatched.subject })).toBeVisible();
+    await expect(readingPane.locator("[data-mc-open-crm]")).toHaveCount(0);
+    const openByEmail = async () => {
+      await readingPane.getByRole("button", { name: "buyer@example.com" }).click();
+      await expect(drawer.getByRole("heading", { name: company })).toBeVisible();
+      await openView(page, "mail-center");
+    };
+    await openByEmail();
+    await page.locator('[data-mc-folder="sent"]').click();
+    await page.locator('[data-mc-message="sent-reply"]').click();
+    await openByEmail();
+    await page.locator('[data-mc-folder="inbox"]').click();
+    await page.getByRole("checkbox", { name: `选择邮件 ${reply.subject}` }).check();
+    await page.getByRole("button", { name: "永久删除" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "取消" }).click();
+    await page.getByRole("button", { name: "移入垃圾箱" }).click();
+    await expect(row).toHaveCount(0);
+    await page.locator('[data-mc-folder="trash"]').click();
+    await row.click();
+    await openByEmail();
+    await page.getByRole("checkbox", { name: "本页全选" }).check();
+    await page.getByRole("button", { name: "永久删除" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "永久删除" }).click();
+    await expect(row).toHaveCount(0);
+  });
+
+  test("lead management converts a search candidate through the list and drawer", async ({ page }) => {
+    await page.setViewportSize({ width: 1610, height: 767 });
+    const company = `Search Candidate ${runId}`;
+    const email = `buyer.${runId}@example.com`;
+    const website = `https://lead-${runId}.example`;
+    const { opportunities: [candidate] } = await apiFromPage<{ opportunities: Array<{ id: string }> }>(
+      page, "/api/tools/website-scrape/preview", { method: "POST", body: { urls: [website] } }
+    );
+    const details = { company, country: "Australia", website, contact: "Test Buyer", contactInfo: email };
+    await apiFromPage(page, `/api/prospect-list/${candidate.id}/details`, { method: "PATCH", body: details });
+    await apiFromPage(page, "/api/tools/website-scrape/sync-opportunities", {
+      method: "POST",
+      body: { requestId: `lead-candidate-${runId}`, opportunities: [{ id: candidate.id, ...details }] }
+    });
+
+    const acquisition = page.locator('.nav-section[aria-label="获客"]');
+    await expect(acquisition.locator("button[data-view]")).toHaveText([
+      "搜客", "搜客清单", "线索管理", "自动获客流", "表单线索"
+    ]);
+    await openView(page, "leads");
+    await page.locator("#leadRefreshButton").click();
+    await page.locator("#leadSearchInput").fill(company);
+    const table = page.locator("#leads .lead-desktop-table");
+    const row = table.getByRole("row", { name: new RegExp(company) });
+    await expect(row).toBeVisible();
+    expect(await table.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+
+    await row.getByRole("button", { name: "转为客户" }).click();
+    await expect(page.locator("#leadDrawer")).not.toHaveClass(/open/);
+    const confirm = page.locator("#confirmLeadConversionButton");
+    await confirm.locator("..").getByRole("button", { name: "取消" }).click();
+    await row.getByRole("button", { name: company }).click();
+    await page.locator("#leadConvertButton").click();
+    await expect(confirm).toBeVisible();
+    await expect(page.locator("#leadCreateDealInput")).not.toBeChecked();
+    await confirm.click();
+    await expect(row).toContainText("已转客户");
+    await expect(row.getByRole("button", { name: "转为客户" })).toHaveCount(0);
+    await openView(page, "customers");
+    await page.locator("#customerSearchInput").fill(company);
+    await expect(page.locator("#customers tbody").getByRole("button", { name: company })).toBeVisible();
+    const { customers } = await apiFromPage<{ customers: Array<{ company: string; email: string }> }>(page, "/api/customers");
+    expect(customers.find((customer) => customer.company === company)?.email).toBe(email);
+  });
+
   test("lead management uses mobile cards and a full-screen detail drawer", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openView(page, "leads");
@@ -2360,7 +2498,7 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#leadDrawer")).toHaveClass(/open/);
     await expect(page.locator("#leadDrawerBackdrop")).toHaveClass(/active/);
 
-    await page.locator(".sidebar button[data-view='customers']").click();
+    await page.locator(".sidebar").getByRole("button", { name: "未成交客户", exact: true }).click();
 
     await expect(page.locator("#customers")).toHaveClass(/active/);
     await expect(page.locator("#leadDrawer")).not.toHaveClass(/open/);

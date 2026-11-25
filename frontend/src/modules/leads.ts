@@ -74,26 +74,36 @@ export function renderLeads() {
   const replyFlag = (lead: { lastEmailReplyAt?: string }) => lead.lastEmailReplyAt
     ? `<span class="lead-reply-flag" title="客户已回复：${escapeHtml(new Date(lead.lastEmailReplyAt).toLocaleString("zh-CN"))}">✉</span>`
     : "";
+  const rowActions = (lead: Lead) => {
+    const action = (name: string, label: string, style = "") =>
+      `<button class="btn tiny ${style}" type="button" data-lead-row-action="${name}" data-lead-row-id="${escapeHtml(lead.id)}">${label}</button>`;
+    if (state.leadView === "trash") {
+      return action("restore", "恢复") + (lead.convertedCustomerId ? "" : action("permanent", "永久删除", "danger"));
+    }
+    return (lead.convertedCustomerId ? badge("已转客户", "green") : action("convert", "转为客户", "primary"))
+      + (assignableLead(lead) ? action("assign", "指派") : "")
+      + action("trash", "删除", "danger subtle");
+  };
+  const rowCheck = (lead: Lead) =>
+    `<input type="checkbox" class="lead-row-check" data-lead-check="${escapeHtml(lead.id)}" ${state.selectedLeadIds.includes(lead.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(lead.company)}" title="勾选加入发信批次">`;
+  const contactSummary = (lead: Lead) =>
+    [lead.contact || "联系人待补充", lead.country || "国家待补充", lead.email].filter(Boolean).map(escapeHtml).join(" · ");
   tbody.innerHTML = pageRows.length ? pageRows.map((lead) => `<tr data-lead-id="${lead.id}" class="${lead.id === state.selectedLeadId ? "selected" : ""}">
-    <td><div class="company"><input type="checkbox" class="lead-row-check" data-lead-check="${lead.id}" ${state.selectedLeadIds.includes(lead.id) ? "checked" : ""} title="勾选加入发信批次">${countryFlag(lead.country)}<div><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${replyFlag(lead)}<span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}${lead.email ? ` · ${escapeHtml(lead.email)}` : ""}</span></div></div></td>
+    <td><div class="company">${rowCheck(lead)}${countryFlag(lead.country)}<div class="lead-company-details"><div class="lead-company-title"><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${replyFlag(lead)}</div><span class="lead-company-meta">${contactSummary(lead)}</span></div></div></td>
     <td><div class="lead-decision-cell">${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}${badge(lead.stage, leadStageTone(lead.stage))}</div></td>
     <td><div class="lead-follow-cell"><b>${escapeHtml(lead.nextFollowAt || "未安排")}</b><span>${leadFollowState(lead) === "overdue" ? "已逾期" : leadFollowState(lead) === "unset" ? "待安排" : "已计划"}</span></div></td>
     <td><div class="lead-source-cell"><b>${escapeHtml(leadSourceLabel(lead))}</b><span>${escapeHtml(lead.sourceCampaign || lead.externalId || "无活动编号")}</span></div></td>
     <td><div class="lead-created-cell"><b>${escapeHtml(formatLeadDate(lead.createdAt))}</b></div></td>
     <td>${badge(state.leadView === "trash" ? "垃圾箱" : (LEAD_STATUS_LABEL[lead.status] || lead.status), state.leadView === "trash" ? "red" : (LEAD_STATUS_TONE[lead.status] || ""))}</td>
-    <td><div class="lead-row-actions">${state.leadView === "trash"
-      ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
-      : `${assignableLead(lead) ? `<button class="btn tiny" type="button" data-lead-row-action="assign" data-lead-row-id="${lead.id}">指派</button>` : ""}<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</div></td>
+    <td><div class="lead-row-actions">${rowActions(lead)}</div></td>
   </tr>`).join("") : `<tr><td colspan="7" class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</td></tr>`;
 
   cards.innerHTML = pageRows.length ? pageRows.map((lead) => `
     <article class="lead-mobile-card ${lead.id === state.selectedLeadId ? "selected" : ""}" data-lead-id="${lead.id}">
-      <span class="lead-mobile-top"><button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${replyFlag(lead)}${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</span>
-      <span>${escapeHtml(lead.contact || "联系人待补充")} · ${escapeHtml(lead.country || "国家待补充")}${lead.email ? ` · ${escapeHtml(lead.email)}` : ""}</span>
+      <span class="lead-mobile-top">${rowCheck(lead)}<button class="lead-name" data-open-lead="${lead.id}">${escapeHtml(lead.company)}</button>${replyFlag(lead)}${badge("意向" + lead.intent, lead.intent === "高" ? "red" : lead.intent === "中" ? "amber" : "gray")}</span>
+      <span>${contactSummary(lead)}</span>
       <span class="lead-mobile-meta"><i>${escapeHtml(lead.stage)}</i><i>${escapeHtml(leadSourceLabel(lead))}</i><i>${escapeHtml(lead.nextFollowAt || "待安排跟进")}</i><i>${escapeHtml(formatLeadDate(lead.createdAt))}</i></span>
-      <span class="lead-mobile-actions">${state.leadView === "trash"
-        ? `<button class="btn tiny" type="button" data-lead-row-action="restore" data-lead-row-id="${lead.id}">恢复</button>${lead.convertedCustomerId ? "" : `<button class="btn tiny danger" type="button" data-lead-row-action="permanent" data-lead-row-id="${lead.id}">永久删除</button>`}`
-        : `${assignableLead(lead) ? `<button class="btn tiny" type="button" data-lead-row-action="assign" data-lead-row-id="${lead.id}">指派</button>` : ""}<button class="btn tiny danger subtle" type="button" data-lead-row-action="trash" data-lead-row-id="${lead.id}">删除</button>`}</span>
+      <span class="lead-mobile-actions">${rowActions(lead)}</span>
     </article>`).join("") : `<div class="empty-cell">${state.leadView === "trash" ? "垃圾箱中没有符合条件的线索" : "暂无符合条件的线索"}</div>`;
 
   qsa<HTMLButtonElement>("[data-open-lead]", qs("#leads")!).forEach((button) => button.addEventListener("click", () => {
@@ -122,6 +132,7 @@ export function renderLeads() {
     const lead = activeLeads.find((item) => item.id === button.dataset.leadRowId);
     if (!lead) return;
     const action = button.dataset.leadRowAction;
+    if (action === "convert") void openLeadConversion(lead.id);
     if (action === "trash") openLeadTrashModal(lead);
     if (action === "assign") void openLeadAssignModal([lead.id]);
     if (action === "restore") void restoreLead(lead.id);
@@ -132,6 +143,9 @@ export function renderLeads() {
     if (!id) return;
     if (box.checked && !state.selectedLeadIds.includes(id)) state.selectedLeadIds.push(id);
     if (!box.checked) state.selectedLeadIds = state.selectedLeadIds.filter((item) => item !== id);
+    qsa<HTMLInputElement>(".lead-row-check").forEach((other) => {
+      if (other.dataset.leadCheck === id) other.checked = box.checked;
+    });
     const createButton = qs<HTMLButtonElement>("#leadCreateOutreachBatchButton");
     if (createButton) createButton.textContent = state.selectedLeadIds.length ? `✉ 生成发信批次（${state.selectedLeadIds.length}）` : "✉ 生成发信批次";
   }));
@@ -658,8 +672,15 @@ export async function openLeadConversion(
   recommendation?: DealRecommendation
 ) {
   try {
-    const preview = await api<{ lead: Lead; customerMatches: LeadConversionMatch[] }>(`/api/leads/${id}/conversion-preview`);
-    const { lead, customerMatches } = preview;
+    const { lead, customerMatches, conversion } = await api<{
+      lead: Lead;
+      customerMatches: LeadConversionMatch[];
+      conversion: { mode: "lead" | "unresolved" } | { mode: "prospect"; prospectId: string };
+    }>(`/api/leads/${id}/conversion-preview`);
+    if (conversion.mode === "unresolved") {
+      toast("线索的获客来源关联缺失，暂时无法转为客户", "error");
+      return;
+    }
     const conversionRequestId = prospectRequestId("prospect-customer");
     const suggestedQuantity = Number(recommendation?.suggestedQuantity || 0);
     const suggestedUnitPrice = Number(recommendation?.suggestedUnitPrice || 0);
@@ -709,20 +730,19 @@ export async function openLeadConversion(
     qs<HTMLInputElement>("#leadCreateDealInput")?.addEventListener("change", (event) => {
       renderLeadConversionDealFields((event.currentTarget as HTMLInputElement).checked);
     });
-    qs<HTMLButtonElement>("#confirmLeadConversionButton")?.addEventListener("click", () => void confirmLeadConversion(id));
+    const prospectId = conversion.mode === "prospect" ? conversion.prospectId : "";
+    qs<HTMLButtonElement>("#confirmLeadConversionButton")?.addEventListener("click", () => void confirmLeadConversion(lead, prospectId));
   } catch (error) {
     toast(error instanceof Error ? error.message : "加载入库信息失败", "error");
   }
 }
 
-async function confirmLeadConversion(id: string) {
+async function confirmLeadConversion(lead: Lead, prospectId: string) {
+  const id = lead.id;
   const selected = qs<HTMLInputElement>('input[name="leadCustomerMode"]:checked')?.value || "create";
   const createDeal = Boolean(qs<HTMLInputElement>("#leadCreateDealInput")?.checked);
   const button = qs<HTMLButtonElement>("#confirmLeadConversionButton");
   const customerMode = selected.startsWith("existing:") ? "existing" : "create";
-  const sourceProspect = state.websiteOpportunities.find((item) =>
-    item.leadId === id && Boolean(item.tenantProspectId)
-  );
   const recommendationId = qs<HTMLInputElement>("#leadConversionRecommendationId")?.value.trim() || "";
   const dealTitle = qs<HTMLInputElement>("#leadDealTitleInput")?.value.trim() || "";
   const dealProduct = qs<HTMLInputElement>("#leadDealProductInput")?.value.trim() || "";
@@ -749,11 +769,11 @@ async function confirmLeadConversion(id: string) {
       button.textContent = "入库中";
     }
     let result: { customer: Customer; deal?: Deal };
-    if (sourceProspect?.tenantProspectId) {
+    if (prospectId) {
       const conversionRequestId = qs<HTMLInputElement>("#leadConversionRequestId")?.value.trim()
         || prospectRequestId("prospect-customer");
       const conversion = await api<{ customer: Customer }>(
-        `/api/prospects/${encodeURIComponent(sourceProspect.tenantProspectId)}/convert-to-customer`,
+        `/api/prospects/${encodeURIComponent(prospectId)}/convert-to-customer`,
         {
           method: "POST",
           headers: { "Idempotency-Key": conversionRequestId },
@@ -764,16 +784,17 @@ async function confirmLeadConversion(id: string) {
             existingCustomerId: customerMode === "existing"
               ? selected.slice("existing:".length)
               : undefined,
-            company: customerMode === "create" ? previewLeadValue(id, "company") : undefined,
-            contact: customerMode === "create" ? previewLeadValue(id, "contact") : undefined,
-            country: customerMode === "create" ? previewLeadValue(id, "country") : undefined,
-            nextReminder: customerMode === "create"
-              ? previewLeadValue(id, "nextFollowAt")
-              : undefined
+            company: customerMode === "create" ? lead.company : undefined,
+            contact: customerMode === "create" ? lead.contact : undefined,
+            country: customerMode === "create" ? lead.country : undefined,
+            nextReminder: customerMode === "create" ? lead.nextFollowAt : undefined
           })
         }
       );
-      sourceProspect.customerId = conversion.customer.id;
+      const sourceProspect = state.websiteOpportunities.find((item) =>
+        item.leadId === id && item.tenantProspectId === prospectId
+      );
+      if (sourceProspect) sourceProspect.customerId = conversion.customer.id;
       result = { customer: conversion.customer };
       if (createDeal) {
         const suggestedQuantity = Number(qs<HTMLInputElement>("#leadConversionDealQuantity")?.value || 0);
@@ -827,15 +848,6 @@ async function confirmLeadConversion(id: string) {
       button.textContent = "确认转为客户";
     }
   }
-}
-
-function previewLeadValue(
-  id: string,
-  field: "company" | "contact" | "country" | "nextFollowAt"
-) {
-  const lead = state.leads.find((item) => item.id === id)
-    || state.leadTrash.find((item) => item.id === id);
-  return lead?.[field] || "";
 }
 
 export async function createLead(form: HTMLFormElement) {

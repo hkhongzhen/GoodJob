@@ -1,4 +1,5 @@
 import { ImapFlow } from "imapflow";
+import { randomUUID } from "node:crypto";
 import { simpleParser, type ParsedMail } from "mailparser";
 import type { Pool } from "mysql2/promise";
 import nodemailer from "nodemailer";
@@ -685,6 +686,13 @@ export interface MailListQuery {
 class MysqlMailCenterRepository {
   constructor(private readonly pool: Pool) {}
 
+  async removeMessageIndex(message: MailMessage) {
+    await this.pool.execute(
+      "DELETE FROM mail_center_messages WHERE id = ? AND owner_id = ? AND team_id = ? AND folder = ? AND uid = ? AND uid_validity = ?",
+      [message.id, message.ownerId, message.teamId, message.folder, message.uid, message.uidValidity]
+    );
+  }
+
   async upsertMessage(message: Omit<MailMessage, "id" | "createdAt"> & { id?: string }) {
     const id = message.id || `mcm_${message.mailboxId.slice(0, 12)}_${message.folder.slice(0, 6)}_${message.uid}`;
     await this.pool.execute(
@@ -1240,6 +1248,93 @@ export class MailCenterSyncService {
     return this.syncAccountRow(row);
   }
 
+  async manageMessages(ownerId: string, teamId: string, ids: string[], action: "trash" | "delete") {
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; message: string }> = [];
+    const groups = new Map<string, MailMessage[]>();
+    for (const id of ids) {
+      const message = await this.repository.getMessage(ownerId, teamId, id);
+      if (!message || !(message.folderKind === "inbox" || (action === "delete" && message.folderKind === "trash"))) {
+        failed.push({ id, message: "邮件不存在或不在可操作的文件夹" });
+        continue;
+      }
+      const group = groups.get(message.mailboxId) || [];
+      group.push(message);
+      groups.set(message.mailboxId, group);
+    }
+    for (const [mailboxId, messages] of groups) {
+      if (this.runningAccounts.has(mailboxId)) {
+        messages.forEach(({ id }) => failed.push({ id, message: "邮箱正在处理其他操作，请稍后重试" }));
+        continue;
+      }
+      this.runningAccounts.add(mailboxId);
+      let client: ImapFlow | undefined;
+      try {
+        const [rows] = await this.pool.query(
+          "SELECT id, team_id, smtp_host, smtp_user, imap_host, imap_port, imap_user FROM sender_mailboxes WHERE id = ? AND owner_id = ? AND team_id = ?",
+          [mailboxId, ownerId, teamId]
+        );
+        const account = (rows as Array<Record<string, unknown>>)[0];
+        if (!account) throw new Error("邮箱不可用");
+        client = await this.createImapClient(account);
+        client.on("error", () => undefined);
+        await client.connect();
+        const trash = (await this.resolveSyncFolders(client)).find((folder) => folder.kind === "trash");
+        if (action === "trash" && !trash) throw new Error("邮箱服务器没有可用的垃圾箱");
+        if (action === "trash" && !client.capabilities.has("MOVE")) {
+          throw new Error("邮箱服务器不支持安全移动邮件");
+        }
+        // 普通 EXPUNGE 会顺带删除文件夹中其他带 \Deleted 标记的邮件。
+        if (action === "delete" && !client.capabilities.has("UIDPLUS")) {
+          throw new Error("邮箱服务器不支持按邮件永久删除");
+        }
+        for (const message of messages) {
+          let remoteChanged = false;
+          try {
+            if (message.folderKind === "trash" && message.folder !== trash?.path) throw new Error("垃圾箱位置已变更，请先同步邮箱");
+            const lock = await client.getMailboxLock(message.folder);
+            try {
+              if (!client.mailbox || !message.uidValidity || String(client.mailbox.uidValidity) !== message.uidValidity) {
+                throw new Error("邮箱索引已变更，请先同步邮箱");
+              }
+              if (action === "trash" && trash) {
+                if (message.folder === trash.path) throw new Error("邮件已在垃圾箱");
+                const moved = await client.messageMove(message.uid, trash.path, { uid: true });
+                if (!moved) throw new Error("邮件未能移动");
+                remoteChanged = true;
+                const uid = moved.uidMap?.get(message.uid);
+                if (uid && moved.uidValidity) {
+                  await this.repository.upsertMessage({ ...message, id: `mcm_${randomUUID()}`,
+                    folder: trash.path, folderKind: "trash", uid, uidValidity: String(moved.uidValidity) });
+                }
+              } else {
+                if (!await client.messageDelete(message.uid, { uid: true })) throw new Error("邮件未能删除");
+                remoteChanged = true;
+              }
+            } finally {
+              lock.release();
+            }
+            await this.repository.removeMessageIndex(message);
+            succeeded.push(message.id);
+          } catch {
+            if (remoteChanged) {
+              await this.repository.removeMessageIndex(message).catch(() => undefined);
+              succeeded.push(message.id);
+            } else {
+              failed.push({ id: message.id, message: "邮箱拒绝该操作，或邮件索引已变更，请同步后重试" });
+            }
+          }
+        }
+      } catch {
+        messages.forEach(({ id }) => failed.push({ id, message: "无法操作该邮箱，请检查连接及服务器对移动或删除的支持" }));
+      } finally {
+        if (client) await this.closeClient(client);
+        this.runningAccounts.delete(mailboxId);
+      }
+    }
+    return { succeeded, failed };
+  }
+
   private async syncAccountRow(row: Record<string, unknown>) {
     const id = String(row.id || "");
     if (this.runningAccounts.has(id)) throw new Error("该邮箱正在同步，请稍后再试");
@@ -1286,15 +1381,6 @@ export class MailCenterSyncService {
     const teamId = String(row.team_id || "");
     const mailboxId = String(row.id || "");
     const mailboxEmail = normalizeAddress(String(row.email || ""));
-    const smtpHost = String(row.smtp_host || "");
-    const imapHost = String(row.imap_host || "").trim() || deriveImapHost(smtpHost);
-    const imapUser = String(row.imap_user || "").trim() || String(row.smtp_user || "").trim();
-    const imapPort = Number(row.imap_port || 993) || 993;
-    if (!imapHost) throw new Error("无法确定 IMAP 服务器，请在账号里填写 IMAP 主机");
-    if (!imapUser) throw new Error("IMAP 账号为空");
-    const password = await this.resolvePassword(mailboxId, teamId);
-    if (!password) throw new Error("IMAP 授权码为空");
-
     const cursor = parseCursor(row.sync_cursor_json);
     const summary = {
       scanned: 0, saved: 0, skipped: 0, matched: 0, error: "",
@@ -1302,16 +1388,7 @@ export class MailCenterSyncService {
       cursor: { ...cursor }
     };
 
-    const client = new ImapFlow({
-      host: imapHost,
-      port: imapPort,
-      secure: imapPort !== 143,
-      auth: { user: imapUser, pass: password },
-      logger: false,
-      emitLogs: false,
-      socketTimeout: 60_000,
-      greetingTimeout: 20_000
-    } as ConstructorParameters<typeof ImapFlow>[0]);
+    const client = await this.createImapClient(row);
     // ⚠️ 必须挂 error 监听：imapflow 是 EventEmitter，漏挂一次超时就会杀掉整个进程。
     let clientError = "";
     client.on("error", (error: Error) => {
@@ -1542,6 +1619,20 @@ export class MailCenterSyncService {
     if (imap) return imap;
     // 腾讯企业邮 / QQ 邮箱：同一串授权码可同时登 SMTP 与 IMAP
     return decryptMailCredential({ id: mailboxId, teamId, kind: "smtp" }, String(row.smtp_password || ""));
+  }
+
+  private async createImapClient(row: Record<string, unknown>) {
+    const host = String(row.imap_host || "").trim() || deriveImapHost(String(row.smtp_host || ""));
+    const user = String(row.imap_user || "").trim() || String(row.smtp_user || "").trim();
+    const port = Number(row.imap_port || 993) || 993;
+    if (!host) throw new Error("无法确定 IMAP 服务器，请在账号里填写 IMAP 主机");
+    if (!user) throw new Error("IMAP 账号为空");
+    const pass = await this.resolvePassword(String(row.id || ""), String(row.team_id || ""));
+    if (!pass) throw new Error("IMAP 授权码为空");
+    return new ImapFlow({
+      host, port, secure: port !== 143, auth: { user, pass }, logger: false,
+      emitLogs: false, socketTimeout: 60_000, greetingTimeout: 20_000
+    });
   }
 
   /** 我方自有邮箱（收件账号 + 成员发件邮箱）→ 地址与域名，用于排除内部邮件 */

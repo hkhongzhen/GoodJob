@@ -18,6 +18,9 @@ import {
 } from "./email-return-flow";
 import { openSenderMailboxModal, type SenderMailboxView } from "./profile";
 
+const selectedMailIds = new Set<string>();
+let mailActionBusy = false;
+
 // ── 渲染 ────────────────────────────────────────────────────────────────────
 
 /**
@@ -365,6 +368,7 @@ function renderMailCenterTabBody() {
             </select>`}
             <input id="mcMessageSearch" placeholder="搜主题、发件人、正文摘要" value="${escapeHtml(mailCenterState.keyword)}" autocomplete="off">
           </div>
+          <div class="mc-selection-bar" id="mcSelectionBar" hidden></div>
           <div class="mc-msg-list" id="mcMessageList"></div>
         </section>
         <section class="mc-panel mc-detail" id="mcMessageDetail"></section>
@@ -423,9 +427,69 @@ function renderMailCenterTabBody() {
   renderMailCenterToolbox();
 }
 
+function canSelectMail() {
+  return mailCenterState.folder === "inbox" || mailCenterState.folder === "trash";
+}
+
+function renderMailSelection() {
+  const bar = qs<HTMLElement>("#mcSelectionBar");
+  if (!bar) return;
+  bar.hidden = !canSelectMail() || !mailCenterState.messages.length || mailCenterState.loading;
+  if (bar.hidden) return;
+  const count = selectedMailIds.size;
+  const disabled = !count || mailActionBusy ? "disabled" : "";
+  bar.innerHTML = `<label><input type="checkbox" data-mc-select-all ${count === mailCenterState.messages.length ? "checked" : ""}> 本页全选</label>
+    <span aria-live="polite">已选 ${count} 封</span>
+    <div class="mc-selection-actions">
+      ${mailCenterState.folder === "inbox" ? `<button type="button" class="btn tiny" data-mc-mail-action="trash" ${disabled}>移入垃圾箱</button>` : ""}
+      <button type="button" class="btn tiny danger" data-mc-mail-action="delete" ${disabled}>永久删除</button>
+    </div>`;
+  const all = qs<HTMLInputElement>("[data-mc-select-all]", bar);
+  if (all) all.indeterminate = count > 0 && count < mailCenterState.messages.length;
+}
+
+async function manageSelectedMail(action: "trash" | "delete") {
+  const ids = [...selectedMailIds];
+  if (!canSelectMail() || !ids.length || mailActionBusy || (action === "trash" && mailCenterState.folder !== "inbox")) return;
+  mailActionBusy = true;
+  renderMailSelection();
+  try {
+    if (action === "delete" && !await confirmAction({
+      title: "永久删除邮件",
+      message: `将从邮箱服务器永久删除所选的 ${ids.length} 封邮件。删除后无法恢复。`,
+      confirmLabel: "永久删除",
+      tone: "danger"
+    })) return;
+    const result = await api<{ succeeded: string[]; failed: Array<{ id: string; message: string }> }>(
+      "/api/mail-center/messages/actions", { method: "POST", body: JSON.stringify({ action, ids }) }
+    );
+    for (const id of result.succeeded) selectedMailIds.delete(id);
+    if (result.succeeded.includes(mailCenterState.activeMessageId)) {
+      mailCenterState.activeMessage = null;
+      mailCenterState.activeMessageId = "";
+    }
+    if (result.failed.length) {
+      toast(`成功 ${result.succeeded.length} 封，失败 ${result.failed.length} 封。${result.failed[0].message}`, "error");
+    } else {
+      toast(`已${action === "trash" ? "移入垃圾箱" : "永久删除"} ${result.succeeded.length} 封邮件`, "success");
+    }
+    await Promise.allSettled([loadMailCenterMessages(), loadMailCenterFolders(), loadMailCenterAccounts()]);
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "邮件操作失败", "error");
+  } finally {
+    mailActionBusy = false;
+    renderMailSelection();
+  }
+}
+
 function renderMailCenterMessageList() {
   const list = qs<HTMLElement>("#mcMessageList");
   if (!list) return;
+  if (!mailCenterState.loading) {
+    const visibleIds = new Set(mailCenterState.messages.map((message) => message.id));
+    for (const id of selectedMailIds) if (!visibleIds.has(id)) selectedMailIds.delete(id);
+  }
+  renderMailSelection();
   if (mailCenterState.loading) {
     list.innerHTML = mcEmpty("正在加载邮件…", "首次同步需要连接邮箱服务器，稍等几秒");
     return;
@@ -452,10 +516,12 @@ function renderMailCenterMessageList() {
   }
   list.innerHTML = mailCenterState.messages.map((message, index) => {
     const isInbound = message.direction === "inbound";
-    const matched = message.entityType ? `<span class="mc-chip">已归属客户</span>` : "";
+    const matched = message.entityId && message.entityType
+      ? `<span class="mc-chip">${message.entityType === "lead" ? "已归属线索" : "已归属客户"}</span>`
+      : "";
     const faceText = isInbound ? (message.fromName || message.fromAddress) : (message.toAddresses[0] || "我");
     const faceSeed = isInbound ? (message.fromAddress || faceText) : (message.toAddresses[0] || message.mailboxEmail);
-    return `<button class="mc-msg ${mailCenterState.activeMessageId === message.id ? "is-active" : ""} ${mailCenterState.locatedMessageId === message.id ? "is-located" : ""} ${message.readAt ? "" : "is-unread"}" type="button" data-mc-message="${escapeHtml(message.id)}" style="--mc-i:${index}">
+    return `<div class="mc-inbox-row">${canSelectMail() ? `<input type="checkbox" data-mc-select-mail="${escapeHtml(message.id)}" aria-label="选择邮件 ${escapeHtml(message.subject || "无主题")}" ${selectedMailIds.has(message.id) ? "checked" : ""}>` : ""}<button class="mc-msg ${mailCenterState.activeMessageId === message.id ? "is-active" : ""} ${mailCenterState.locatedMessageId === message.id ? "is-located" : ""} ${message.readAt ? "" : "is-unread"}" type="button" data-mc-message="${escapeHtml(message.id)}" style="--mc-i:${index}">
       <span class="mc-msg-av">
         ${mcAvatar(faceText, faceSeed)}
         <i class="mc-msg-dir ${isInbound ? "is-in" : "is-out"}">${isInbound ? "↓" : "↑"}</i>
@@ -466,7 +532,7 @@ function renderMailCenterMessageList() {
         <span class="mc-msg-snippet">${escapeHtml(mcPlainText(message.snippet) || "（无正文摘要）")}</span>
       </span>
       <span class="mc-msg-time">${mcRelativeTime(message.sentAt)}</span>
-    </button>`;
+    </button></div>`;
   }).join("");
 }
 
@@ -537,6 +603,31 @@ function mcLinkifyPlainText(text: string) {
   });
 }
 
+function openMailCenterCrmRecord(message: MailCenterMessage) {
+  if (message.entityType === "lead") {
+    activateNavView("leads", () => void openLead(message.entityId));
+    return;
+  }
+  const customer = state.customers.find((item) => item.id === message.entityId);
+  if (!customer) {
+    toast("客户不存在或无权访问", "error");
+    return;
+  }
+  activateNavView("customers", () => openCustomerDetailPage(customer));
+}
+
+async function openMailLeadByAddress(message: MailCenterMessage, address: string) {
+  try {
+    const params = new URLSearchParams({ email: address });
+    const { entityId } = await api<{ entityId: string }>(`/api/mail-center/messages/${encodeURIComponent(message.id)}/contact?${params}`);
+    if (mailCenterState.activeMessageId !== message.id || qs(".view.active")?.id !== "mail-center") return;
+    if (entityId) activateNavView("leads", () => void openLead(entityId));
+    else toast("这个邮箱没有唯一可查看的线索", "info");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "查找线索失败", "error");
+  }
+}
+
 function renderMailCenterMessageDetail() {
   const detail = qs<HTMLElement>("#mcMessageDetail");
   if (!detail) return;
@@ -559,9 +650,15 @@ function renderMailCenterMessageDetail() {
   const recipients = message.toAddresses.filter(Boolean);
   const shownRecipients = recipients.slice(0, 3);
   const hiddenCount = recipients.length - shownRecipients.length;
-  const recipientPills = shownRecipients.map((addr) => `<span class="mc-meta-pill">${escapeHtml(addr)}</span>`).join("")
+  const leadAddress = (addr: string, style: string) =>
+    `<button type="button" class="${style} mc-lead-address" data-mc-lead-address="${escapeHtml(addr)}" title="按邮箱查找线索">${escapeHtml(addr)}</button>`;
+  const recipientPill = (addr: string) => message.direction === "outbound"
+    ? leadAddress(addr, "mc-meta-pill") : `<span class="mc-meta-pill">${escapeHtml(addr)}</span>`;
+  const recipientPills = shownRecipients.map(recipientPill).join("")
     + (hiddenCount > 0 ? `<button type="button" class="mc-meta-pill mc-meta-more" data-mc-expand-to title="展开全部收件人">+${hiddenCount}</button>` : "")
-    + recipients.slice(3).map((addr) => `<span class="mc-meta-pill" data-mc-hidden-to hidden>${escapeHtml(addr)}</span>`).join("");
+    + recipients.slice(3).map((addr) => `<span data-mc-hidden-to hidden>${recipientPill(addr)}</span>`).join("");
+  const ccPills = message.direction === "outbound"
+    ? message.ccAddresses.filter(Boolean).map((addr) => leadAddress(addr, "mc-meta-pill")).join("") : "";
   // 这封邮件自己的打开/点击/回复：只要台账里认得出这封（engagement 非空）就显示。
   // 不按 direction 过滤 —— 自己发的信在「已发送」和对方「收件箱」各有一份，
   // 用户点开哪一份都该看到同一组数字（对外收到的新信没有台账，自然是空）。
@@ -590,16 +687,20 @@ function renderMailCenterMessageDetail() {
         ${mcAvatar(message.fromName || message.fromAddress, message.fromAddress)}
         <div class="mc-detail-from-text">
           <b>${escapeHtml(message.fromName || message.fromAddress)}</b>
-          <span>${escapeHtml(message.fromAddress)}</span>
+          ${message.direction === "inbound" && message.fromAddress
+            ? leadAddress(message.fromAddress, "mc-detail-address")
+            : `<span>${escapeHtml(message.fromAddress)}</span>`}
         </div>
         <time>${mcDateTime(message.sentAt)}</time>
       </div>
       <div class="mc-detail-meta">
         ${recipientPills || `<span class="mc-meta-pill">收件人 —</span>`}
+        ${ccPills ? `<span class="mc-meta-pill">抄送</span>${ccPills}` : ""}
         <span class="mc-meta-pill">${message.direction === "outbound" ? "发出邮箱" : "收件邮箱"} ${escapeHtml(message.mailboxEmail)}</span>
       </div>
       <div class="mc-detail-actions">
         <button type="button" class="btn primary" data-mc-compose-mode="reply">回复</button>
+        ${message.entityId && message.entityType ? `<button type="button" class="btn mc-btn-journey" data-mc-open-crm>${mcIcon("user")}${message.entityType === "lead" ? "查看线索详情" : "查看客户档案"}</button>` : ""}
         <button type="button" class="btn" data-mc-compose-mode="replyAll">全部回复</button>
         <button type="button" class="btn" data-mc-compose-mode="forward">转发</button>
         <button type="button" class="btn mc-btn-journey ${mailCenterState.journeyMenuOpen ? "is-open" : ""}" data-mc-journey-toggle aria-expanded="${mailCenterState.journeyMenuOpen ? "true" : "false"}" title="按${message.direction === "inbound" ? "发信人" : "收件人"}或按这封邮件的线程看往来">${mcIcon("route")}旅程</button>
@@ -3584,6 +3685,19 @@ function bindMailCenterPage() {
 
   page.onclick = (event) => {
     const target = event.target as HTMLElement;
+    const addressButton = target.closest<HTMLButtonElement>("[data-mc-lead-address]");
+    if (addressButton) {
+      const message = mailCenterState.activeMessage;
+      if (message && addressButton.dataset.mcLeadAddress) void openMailLeadByAddress(message, addressButton.dataset.mcLeadAddress);
+      return;
+    }
+    const mailAction = target.closest<HTMLElement>("[data-mc-mail-action]")?.dataset.mcMailAction;
+    if (mailAction === "trash" || mailAction === "delete") { void manageSelectedMail(mailAction); return; }
+    if (target.closest("[data-mc-open-crm]")) {
+      const message = mailCenterState.activeMessage;
+      if (message?.entityType && message.entityId) openMailCenterCrmRecord(message);
+      return;
+    }
     // AI 助手抽屉：先于工具卡判断，抽屉里的按钮不带 data-mc-tool
     if (target.closest("[data-mc-assist-close]")) { closeMailCenterAssist(); return; }
     const assistAction = target.closest<HTMLElement>("[data-mc-assist-action]");
@@ -3612,13 +3726,7 @@ function bindMailCenterPage() {
         return;
       }
       closeMailCenterAssist();
-      if (message.entityType === "customer") {
-        const customer = state.customers.find((item) => item.id === message.entityId);
-        if (!customer) { toast("客户不存在或无权访问", "error"); return; }
-        activateNavView("customers", () => openCustomerDetailPage(customer));
-      } else {
-        activateNavView("leads", () => void openLead(message.entityId));
-      }
+      openMailCenterCrmRecord(message);
       return;
     }
     const toolSuggest = target.closest<HTMLElement>("[data-mc-tool-suggest]");
@@ -3667,6 +3775,7 @@ function bindMailCenterPage() {
     if (folder) {
       const next = folder.dataset.mcFolder || "inbox";
       if (mailCenterState.folder === next) return;
+      selectedMailIds.clear();
       mailCenterState.folder = next;
       // 切换文件夹等于换了一份数据源：清空详情，别让上一封的内容挂在右边
       mailCenterState.activeMessageId = "";
@@ -3859,6 +3968,20 @@ function bindMailCenterPage() {
   };
 
   page.onchange = (event) => {
+    const checkbox = event.target as HTMLInputElement;
+    if (checkbox.matches("[data-mc-select-all]")) {
+      selectedMailIds.clear();
+      if (checkbox.checked) mailCenterState.messages.forEach(({ id }) => selectedMailIds.add(id));
+      qsa<HTMLInputElement>("[data-mc-select-mail]", page).forEach((item) => { item.checked = checkbox.checked; });
+      renderMailSelection();
+      return;
+    }
+    if (checkbox.dataset.mcSelectMail) {
+      if (checkbox.checked) selectedMailIds.add(checkbox.dataset.mcSelectMail);
+      else selectedMailIds.delete(checkbox.dataset.mcSelectMail);
+      renderMailSelection();
+      return;
+    }
     const target = event.target as HTMLElement;
     const filter = target.closest<HTMLSelectElement>("[data-mc-filter]")?.dataset.mcFilter;
     if (!filter) return;

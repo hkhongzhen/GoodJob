@@ -57,7 +57,7 @@ const CONTACT_DOCK_LABEL: Record<ContactDockChannel, string> = {
 /* 联系条挂到该页「筛选 / 批量操作条」的右端（批量导出右侧那片空位），而不是表格上方另起一块横幅 */
 const CONTACT_DOCK_HOSTS: Record<string, { view: string; container: string }> = {
   customers: { view: "#customers", container: "#customerBulkToolbar" },
-  leads: { view: "#leads", container: ".lead-filter-row" },
+  leads: { view: "#leads", container: ".lead-list-actions" },
   "customer-pool": { view: "#customer-pool", container: ".customer-pool-toolbar" }
 };
 

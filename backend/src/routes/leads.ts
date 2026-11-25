@@ -19,7 +19,7 @@ import {
 import { type Customer, type Deal, type Lead, type SessionUser } from "../types.js";
 import { getStore } from "../store.js";
 import { readWebsiteLeadIngressSettings } from "../website-lead-ingress-settings.js";
-import { PROSPECT_LEAD_SOURCE_CHANNEL } from "../prospect-lead-conversion.js";
+import { PROSPECT_LEAD_CONVERSION_CONTRACT, PROSPECT_LEAD_SOURCE_CHANNEL } from "../prospect-lead-conversion.js";
 import { isPublicCustomer } from "../customer-public-pool.js";
 import { assertCrmOutreachEligible } from "../prospect-outreach-eligibility.js";
 import { recordCrmEmailTouchpoint } from "../email-touchpoints.js";
@@ -143,6 +143,37 @@ function findCustomerMatches(user: SessionUser, lead: Lead) {
     })
     .filter((match) => match.score > 0)
     .sort((left, right) => right.score - left.score);
+}
+
+function leadCustomerConversionRoute(store: ReturnType<typeof getStore>, lead: Lead) {
+  const sources = store.leadSourceEvents.filter((source) =>
+    source.leadId === lead.id && source.teamId === lead.teamId
+    && source.channel === PROSPECT_LEAD_SOURCE_CHANNEL
+  );
+  const prospect = store.tenantProspects.find((item) =>
+    item.teamId === lead.teamId && item.leadId === lead.id
+    && sources.some((source) => source.externalId === item.id)
+  );
+  if (prospect) return { mode: "prospect" as const, prospectId: prospect.id };
+  if (lead.sourceChannel !== PROSPECT_LEAD_SOURCE_CHANNEL && !sources.length) {
+    return { mode: "lead" as const };
+  }
+
+  // 搜客清单和发信批次可直接建立线索。用候选与来源事件的双向关联确认这一旧有路径。
+  const isDirectCandidate = sources.length > 0 && sources.every((source) => {
+    try {
+      const payload = JSON.parse(source.rawPayload) as { candidateId?: string; contract?: string } | null;
+      return Boolean(source.externalId && payload?.candidateId === source.externalId
+        && payload.contract !== PROSPECT_LEAD_CONVERSION_CONTRACT
+        && store.websiteOpportunities.some((candidate) =>
+          candidate.id === source.externalId && candidate.leadId === lead.id
+          && candidate.teamId === lead.teamId && candidate.ownerId === source.ownerId
+        ));
+    } catch {
+      return false;
+    }
+  });
+  return isDirectCandidate ? { mode: "lead" as const } : { mode: "unresolved" as const };
 }
 
 export function registerLeadsRoutes(app: Express) {
@@ -667,7 +698,11 @@ export function registerLeadsRoutes(app: Express) {
       res.status(404).json({ message: "线索不存在、已删除或无权访问" });
       return;
     }
-    res.json({ lead, customerMatches: findCustomerMatches(req.user!, lead) });
+    res.json({
+      lead,
+      customerMatches: findCustomerMatches(req.user!, lead),
+      conversion: leadCustomerConversionRoute(store, lead)
+    });
   });
 
   app.post("/api/leads/:id/convert", requireAuth, asyncRoute(async (req, res) => {
@@ -691,15 +726,7 @@ export function registerLeadsRoutes(app: Express) {
       res.status(404).json({ message: "线索不存在、已删除或无权访问" });
       return;
     }
-    const acquisitionSource = store.leadSourceEvents.find((item) =>
-      item.leadId === lead.id
-      && item.teamId === lead.teamId
-      && item.ownerId === lead.ownerId
-      && item.channel === PROSPECT_LEAD_SOURCE_CHANNEL
-      && item.externalId
-    );
-    if (lead.sourceChannel === PROSPECT_LEAD_SOURCE_CHANNEL
-      || acquisitionSource) {
+    if (leadCustomerConversionRoute(store, lead).mode !== "lead") {
       res.status(409).json({
         message: "智能获客线索必须通过候选客户转客户接口确认入库",
         errorCode: "PROSPECT_CUSTOMER_CONVERSION_REQUIRED"
@@ -735,6 +762,7 @@ export function registerLeadsRoutes(app: Express) {
         billingName: lead.company,
         companyFullName: lead.company,
         billingAddress: "",
+        email: lead.email,
         documentContact: lead.email ? `${lead.contact || "待维护"} / ${lead.email}` : lead.contact || "",
         defaultPortDischarge: "",
         defaultIncoterm: "",

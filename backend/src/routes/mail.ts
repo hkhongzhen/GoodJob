@@ -935,6 +935,36 @@ export function registerMailRoutes(app: Express) {
     res.json({ message: { ...message, engagement: outboundEngagementFor(getStore(), user.teamId, message.messageId) } });
   }));
 
+  app.get("/api/mail-center/messages/:id/contact", requireAuth, asyncRoute(async (req, res) => {
+    const repository = getMailCenterRepository();
+    if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+    const user = req.user!;
+    const message = await repository.getMessage(user.id, user.teamId, req.params.id);
+    if (!message) { res.status(404).json({ message: "邮件不存在或无权访问" }); return; }
+    const address = mailCenterAddressOf(String(req.query.email || ""));
+    const participants = new Set((message.direction === "inbound"
+      ? [message.fromAddress] : [...message.toAddresses, ...message.ccAddresses])
+      .map(mailCenterAddressOf).filter(Boolean));
+    if (!participants.has(address)) { res.json({ entityId: "" }); return; }
+    const visible = getStore().leads.filter((lead) =>
+      !lead.deletedAt && mailCenterVisibleOwner(req, lead.ownerId, lead.teamId));
+    const linked = message.entityType === "lead" && participants.size === 1
+      ? visible.find((lead) => lead.id === message.entityId)
+      : undefined;
+    const exact = visible.filter((lead) => mailCenterAddressOf(lead.email) === address);
+    res.json({ entityId: exact.length === 1 ? exact[0].id : linked?.id || "" });
+  }));
+
+  app.post("/api/mail-center/messages/actions", requireAuth, asyncRoute(async (req, res) => {
+    const service = activeMailCenterSync || getMailCenterSyncService();
+    if (!service) { res.status(503).json({ message: "邮件中心不可用" }); return; }
+    const { action, ids } = z.object({
+      action: z.enum(["trash", "delete"]),
+      ids: z.array(z.string().min(1).max(80)).min(1).max(40)
+    }).parse(req.body);
+    res.json(await service.manageMessages(req.user!.id, req.user!.teamId, [...new Set(ids)], action));
+  }));
+
   app.post("/api/mail-center/messages/:id/read", requireAuth, asyncRoute(async (req, res) => {
     const repository = getMailCenterRepository();
     if (!repository) { res.status(503).json({ message: "邮件中心不可用" }); return; }
