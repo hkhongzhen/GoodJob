@@ -439,6 +439,11 @@ assert.equal(prospectIcpQualificationSchema.safeParse({
   formalProspect.status = "converted";
   formalProspect.queueState = "converted";
   formalProspect.leadId = lead.id;
+  candidate.status = "synced";
+  assert.throws(
+    () => assertProspectEmailOutreachEligible(store, candidate, lead.email),
+    /候选已转为线索/
+  );
   assert.equal(assertCrmOutreachEligible(store, {
     target: { entityType: "lead", entity: lead },
     actorId: lead.ownerId,

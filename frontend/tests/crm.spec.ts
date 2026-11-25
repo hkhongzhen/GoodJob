@@ -2489,6 +2489,26 @@ test.describe("GoodJob CRM prototype pages", () => {
     await expect(page.locator("#leadDrawer")).not.toHaveClass(/open/);
   });
 
+  test("lead contact details can be updated from the drawer", async ({ page }) => {
+    const company = `Contact Update ${runId}`;
+    const { lead } = await apiFromPage<{ lead: { id: string } }>(page, "/api/leads", {
+      method: "POST", body: { company, email: "old@example.com" }
+    });
+    await openView(page, "leads");
+    await page.locator("#leadRefreshButton").click();
+    await page.locator("#leadsTableBody").getByRole("button", { name: company, exact: true }).click();
+    const drawer = page.locator("#leadDrawer");
+    await drawer.getByRole("button", { name: "编辑联系方式" }).click();
+    const modal = page.getByRole("dialog");
+    await expect(modal.getByLabel("邮箱")).toHaveValue("old@example.com");
+    await modal.getByLabel("邮箱").fill("new@example.com");
+    await modal.getByLabel("电话 / WhatsApp").fill("+61 400 000 000");
+    await modal.getByRole("button", { name: "保存联系方式" }).click();
+    await expect(drawer).toContainText("new@example.com");
+    const result = await apiFromPage<{ lead: { email: string; phone: string; company: string } }>(page, `/api/leads/${lead.id}`);
+    expect(result.lead).toMatchObject({ company, email: "new@example.com", phone: "+61 400 000 000" });
+  });
+
   test("lead detail drawer keeps global module navigation available", async ({ page }) => {
     await openView(page, "leads");
     const firstLeadRow = page.locator("#leadsTableBody tr[data-lead-id]").first();

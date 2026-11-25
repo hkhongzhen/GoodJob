@@ -270,7 +270,7 @@ function renderLeadDrawer(
       </div>
     `}
     ${sourceProspect ? renderProcurementContextPanel(procurement, sourceProspect) : ""}
-    <section class="lead-detail-section"><h3>联系与需求</h3><div class="info-grid">${fields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div></section>
+    <section class="lead-detail-section"><div class="lead-section-head"><h3>联系与需求</h3>${inTrash ? "" : `<button class="btn tiny" type="button" id="leadEditContactButton">编辑联系方式</button>`}</div><div class="info-grid">${fields.map(([label, value]) => `<div class="info"><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("")}</div></section>
     <section class="lead-detail-section lead-inquiry-section"><div class="lead-section-head"><h3>询盘内容</h3><span>保存客户发来的原始需求，和内部备注分开管理</span></div><textarea id="leadInquiryContentInput" rows="7" placeholder="粘贴客户发来的询盘、邮件或平台留言">${escapeHtml(lead.inquiryContent || "")}</textarea><div class="lead-section-actions"><button class="btn" id="leadInquiryContentSaveButton">保存询盘内容</button></div></section>
     <section class="lead-detail-section">
       <h3>来源证据</h3>
@@ -292,6 +292,7 @@ function renderLeadDrawer(
     void openWhatsAppForContact({ phone: lead.phone || "", displayName: lead.contact || lead.company });
   });
   qs<HTMLButtonElement>("#leadDevelopmentEmailButton", drawer)?.addEventListener("click", () => openDevelopmentEmail("lead", lead.id, lead.company, "leads", lead.phone || ""));
+  qs<HTMLButtonElement>("#leadEditContactButton", drawer)?.addEventListener("click", () => openLeadContactModal(lead));
   qs<HTMLButtonElement>("#leadAiResearchButton", drawer)?.addEventListener("click", () => openBackgroundResearch("lead", lead.id, lead.company, "leads"));
   qs<HTMLSelectElement>("#leadStageSelect", drawer)?.addEventListener("change", (event) => {
     void changeLeadStage(lead.id, (event.target as HTMLSelectElement).value);
@@ -648,6 +649,35 @@ async function addLeadActivity(id: string) {
   } catch (error) {
     toast(error instanceof Error ? error.message : "记录失败", "error");
   }
+}
+
+function openLeadContactModal(lead: Lead) {
+  openModal("编辑联系方式", `
+    <form id="leadEditContactForm" class="form-grid">
+      <label class="form-field">联系人<input name="contact" value="${escapeHtml(lead.contact || "")}"></label>
+      <label class="form-field">邮箱<input name="email" type="email" value="${escapeHtml(lead.email || "")}"></label>
+      <label class="form-field">电话 / WhatsApp<input name="phone" type="tel" value="${escapeHtml(lead.phone || "")}"></label>
+      <label class="form-field">微信<input name="wechat" value="${escapeHtml(lead.wechat || "")}"></label>
+    </form>`, `<button class="btn" data-modal-close>取消</button><button class="btn primary" type="submit" form="leadEditContactForm">保存联系方式</button>`);
+  const form = qs<HTMLFormElement>("#leadEditContactForm")!;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = qs<HTMLButtonElement>('button[form="leadEditContactForm"]')!;
+    if (button.disabled) return;
+    button.disabled = true;
+    const body = Object.fromEntries([...new FormData(form)].map(([key, value]) => [key, String(value).trim()]));
+    try {
+      await api(`/api/leads/${encodeURIComponent(lead.id)}`, { method: "PATCH", body: JSON.stringify(body) });
+      if (form.isConnected && qs("#appModal")?.classList.contains("active")) closeModal();
+      await reloadLeads();
+      if (state.selectedLeadId === lead.id && qs("#leadDrawer")?.classList.contains("open")) await openLead(lead.id);
+      toast("联系方式已保存");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "联系方式保存失败", "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 async function saveLeadInquiryContent(id: string) {

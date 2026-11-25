@@ -199,7 +199,7 @@ function assertManagedCandidateEligible(
       "该企业已进入永久禁止联系名单"
     );
   }
-  if (candidate.status === "synced") {
+  if (target.entityType === "candidate" && candidate.status === "synced") {
     fail(
       "PROSPECT_OUTREACH_NOT_ACTIVE",
       "候选已转为线索，请通过线索或客户发起外联"
